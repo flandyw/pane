@@ -1,0 +1,67 @@
+diff --git a/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c b/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
+index 4855ff8..699de5c 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
++++ b/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
+@@ -857,7 +857,17 @@ JNIEXPORT void JNICALL Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_
+ 	freerdp* inst = (freerdp*)instance;
+ 
+ 	if (inst)
++	{
++		/* Join the native thread before freeing a context referenced by its callbacks. */
++		androidContext* ctx = (androidContext*)inst->context;
++		if (ctx->thread)
++		{
++			WaitForSingleObject(ctx->thread, INFINITE);
++			CloseHandle(ctx->thread);
++			ctx->thread = nullptr;
++		}
+ 		freerdp_client_context_free(inst->context);
++	}
+ 
+ #if defined(WITH_GPROF)
+ 	moncleanup();
+diff --git a/client/Android/cmake/ExternalFreeRDP.cmake b/client/Android/cmake/ExternalFreeRDP.cmake
+index 69a258e..b6f2952 100644
+--- a/client/Android/cmake/ExternalFreeRDP.cmake
++++ b/client/Android/cmake/ExternalFreeRDP.cmake
+@@ -49,6 +49,7 @@ ExternalProject_Add(
+   freerdp
+   DOWNLOAD_EXTRACT_TIMESTAMP OFF
+   SOURCE_DIR ${FREERDP_SOURCE_DIR}
++  BUILD_ALWAYS ON
+   LIST_SEPARATOR |
+   CMAKE_ARGS ${ANDROID_CMAKE_ARGS} -DCMAKE_PREFIX_PATH:PATH=${FREERDP_PREFIX_PATH} ${FREERDP_EXTRA_CMAKE_ARGS}
+   DEPENDS ${ANDROID_NATIVE_DEPS}
+diff --git a/client/Android/cmake/ExternalOpenSSL.cmake b/client/Android/cmake/ExternalOpenSSL.cmake
+index ec7fde4..f399873 100644
+--- a/client/Android/cmake/ExternalOpenSSL.cmake
++++ b/client/Android/cmake/ExternalOpenSSL.cmake
+@@ -31,9 +31,9 @@ ExternalProject_Add(
+     ANDROID_NDK_HOME=${NDK_ROOT} CC=clang perl <SOURCE_DIR>/Configure ${OSSL_ARCH} shared no-tests no-apps no-docs
+     -U__ANDROID_API__ -D__ANDROID_API__=${NDK_API_LEVEL} --prefix=${DEPS_INSTALL_DIR} --libdir=${CMAKE_INSTALL_LIBDIR}
+   BUILD_COMMAND ${CMAKE_COMMAND} -E env PATH=${NDK_TOOLCHAIN_BIN}:$ENV{PATH} ANDROID_NDK=${NDK_ROOT}
+-                ANDROID_NDK_ROOT=${NDK_ROOT} ANDROID_NDK_HOME=${NDK_ROOT} make -j SHLIB_EXT=.so build_libs
++                ANDROID_NDK_ROOT=${NDK_ROOT} ANDROID_NDK_HOME=${NDK_ROOT} make -j2 SHLIB_EXT=.so build_libs
+   INSTALL_COMMAND
+     ${CMAKE_COMMAND} -E env PATH=${NDK_TOOLCHAIN_BIN}:$ENV{PATH} ANDROID_NDK=${NDK_ROOT} ANDROID_NDK_ROOT=${NDK_ROOT}
+-    ANDROID_NDK_HOME=${NDK_ROOT} make -j SHLIB_EXT=.so install_sw && ${CMAKE_COMMAND} -E copy_directory
++    ANDROID_NDK_HOME=${NDK_ROOT} make -j2 SHLIB_EXT=.so install_sw && ${CMAKE_COMMAND} -E copy_directory
+     ${DEPS_INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR}/ossl-modules ${DEPS_INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR}
+ )
+diff --git a/libfreerdp/crypto/tls.c b/libfreerdp/crypto/tls.c
+index 7eb61f6..16fba6b 100644
+--- a/libfreerdp/crypto/tls.c
++++ b/libfreerdp/crypto/tls.c
+@@ -1844,9 +1844,10 @@ int tls_verify_certificate(rdpTls* tls, const rdpCertificate* cert, const char*
+ 		goto end;
+ 	}
+ 
+-	if (is_accepted_fingerprint(cert, settings->CertificateAcceptedFingerprints))
++	/* Pane profiles require an exact pin, including for certificates trusted by a CA. */
++	if (settings->CertificateAcceptedFingerprints && settings->CertificateAcceptedFingerprints[0])
+ 	{
+-		verification_status = 1;
++		verification_status = is_accepted_fingerprint(cert, settings->CertificateAcceptedFingerprints) ? 1 : -1;
+ 		goto end;
+ 	}
+ 

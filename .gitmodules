@@ -1,0 +1,6 @@
+[submodule "release-server"]
+	path = release-server
+	url = https://github.com/flandyw/release-server.git
+[submodule "vendor/FreeRDP"]
+	path = vendor/FreeRDP
+	url = https://github.com/FreeRDP/FreeRDP.git

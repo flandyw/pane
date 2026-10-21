@@ -1,0 +1,7 @@
+Pane includes FreeRDP 3.32.2 (commit 97eff6d), https://github.com/FreeRDP/FreeRDP/tree/3.32.2
+FreeRDP libraries: Apache License 2.0. Android JNI layer: Mozilla Public License 2.0.
+Original copyright notices are preserved in upstream sources and android_freerdp.c.
+The modified JNI file and freerdp.patch are included alongside this notice.
+OpenSSL 4.0.1: Apache License 2.0, https://github.com/openssl/openssl/tree/openssl-4.0.1
+uriparser 1.0.2: BSD 3-Clause, https://github.com/uriparser/uriparser/tree/uriparser-1.0.2
+AndroidX / Jetpack Compose: Apache License 2.0, https://android.googlesource.com/platform/frameworks/support/
