@@ -12,7 +12,8 @@ data class Profile(
     val host: String = "",
     val username: String = "",
     val fingerprint: String = "",
-    val quality: Quality = Quality.BALANCED
+    val quality: Quality = Quality.BALANCED,
+    val audio: Boolean = true
 ) {
     fun error(): String? = when {
         host.isBlank() || host.length > 253 || !host.matches(Regex("[a-zA-Z0-9.-]+")) -> "Enter a Tailscale IPv4 address or hostname, without a port."
@@ -30,7 +31,8 @@ data class Profile(
             "/sec:tls", "/cert:deny,fingerprint:sha256:${normalizedPin()}",
             "/timeout:10000", "/network:lan", "/compression", "/compression-level:2",
             "-wallpaper", "-window-drag", "-menu-anims", "-aero", "+fonts",
-            "/audio-mode:2", "/clipboard", "/kbd:unicode:on", "/log-level:ERROR"
+            // rdpsnd picks AAudio, falling back to OpenSL ES; the server is offered PCM/ADPCM only.
+            if (audio) "/sound" else "/audio-mode:2", "/clipboard", "/kbd:unicode:on", "/log-level:ERROR"
         )
     }
 }

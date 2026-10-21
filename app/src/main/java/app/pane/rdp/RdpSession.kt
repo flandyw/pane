@@ -23,7 +23,8 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
         host = prefs.getString("host", null) ?: Profile().host,
         username = prefs.getString("username", null) ?: Profile().username,
         fingerprint = prefs.getString("pin", null) ?: Profile().fingerprint,
-        quality = Quality.entries.firstOrNull { it.name == prefs.getString("quality", "BALANCED") } ?: Quality.BALANCED
+        quality = Quality.entries.firstOrNull { it.name == prefs.getString("quality", "BALANCED") } ?: Quality.BALANCED,
+        audio = prefs.getBoolean("audio", true)
     ))
     var phase by mutableStateOf(Phase.IDLE); private set
     var message by mutableStateOf(""); private set
@@ -59,7 +60,7 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
         val error = profile.error()
         if (error != null || password.isEmpty()) { message = error ?: "Enter your Linux password."; return }
         prefs.edit().putString("host", profile.host).putString("username", profile.username)
-            .putString("pin", profile.normalizedPin()).putString("quality", profile.quality.name).apply()
+            .putString("pin", profile.normalizedPin()).putString("quality", profile.quality.name).putBoolean("audio", profile.audio).apply()
         phase = Phase.CONNECTING
         message = ""
         toolbar = true

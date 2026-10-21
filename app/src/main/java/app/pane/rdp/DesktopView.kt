@@ -318,5 +318,10 @@ internal fun virtualKey(code: Int): Int? = when(code) {
     KeyEvent.KEYCODE_PERIOD -> 0xbe
     KeyEvent.KEYCODE_SLASH -> 0xbf
     KeyEvent.KEYCODE_GRAVE -> 0xc0
+    // Media keys control the desktop's player; volume keys stay with the tablet.
+    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> 0xb3
+    KeyEvent.KEYCODE_MEDIA_NEXT -> 0xb0
+    KeyEvent.KEYCODE_MEDIA_PREVIOUS -> 0xb1
+    KeyEvent.KEYCODE_MEDIA_STOP -> 0xb2
     else -> null
 }

@@ -13,7 +13,9 @@ class ProfileTest {
         assertTrue(args.contains("/size:1600x1000"))
         assertTrue(args.contains("/bpp:24"))
         assertTrue(args.contains("-aero"))
-        assertTrue(args.contains("/audio-mode:2"))
+        assertTrue(args.contains("/sound"))
+        assertFalse(args.contains("/audio-mode:2"))
+        assertTrue(valid.copy(audio=false).arguments("x").let { it.contains("/audio-mode:2") && !it.contains("/sound") })
         assertTrue(args.any { it.startsWith("/cert:deny,fingerprint:sha256:") })
         assertFalse(args.any { it.contains("ignore") || it.contains("tofu") || it.contains("gfx") || it.contains("rfx") })
     }
@@ -53,6 +55,7 @@ class ProfileTest {
         assertEquals(0x2d,virtualKey(KeyEvent.KEYCODE_INSERT))
         assertEquals(0x65,virtualKey(KeyEvent.KEYCODE_NUMPAD_5))
         assertNull(virtualKey(KeyEvent.KEYCODE_VOLUME_UP))
+        assertEquals(0xb3,virtualKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
     }
     private fun feed(code: Int, url: String = "https://pane.flandolf.me/releases/v0.2.0/pane-0.2.0.apk", digest: String = "sha256:"+"a".repeat(64), size: Long = 1000) =
         """{"version_code":$code,"version_name":"0.2.0","assets":[{"name":"pane-0.2.0.apk","browser_download_url":"$url","size":$size,"digest":"$digest"},{"name":"SHA256SUMS","browser_download_url":"x","size":1,"digest":"x"}]}"""

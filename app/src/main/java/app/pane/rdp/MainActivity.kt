@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -25,6 +26,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -43,6 +45,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -184,6 +187,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
             Text("${session.size}  ·  ${session.profile.quality.detail}",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth().toggleable(session.profile.audio,role = Role.Switch) { session.profile=session.profile.copy(audio=it) },verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Desktop sound",style = MaterialTheme.typography.titleMedium)
+                    Text("Plays on this tablet. Off saves a little VPS work.",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = session.profile.audio,onCheckedChange = null)
+            }
             if (session.message.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.errorContainer,shape = RoundedCornerShape(16.dp)) {
                 Text(session.message,Modifier.padding(16.dp),style = MaterialTheme.typography.bodyMedium,color = MaterialTheme.colorScheme.onErrorContainer)
             }
@@ -198,7 +208,7 @@ class MainActivity : ComponentActivity() {
                 Text("Verified server",style = MaterialTheme.typography.titleMedium)
                 Text("TLS certificate pinned to this VPS. A changed certificate blocks the connection.",style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(value = session.profile.fingerprint,onValueChange = {session.profile=session.profile.copy(fingerprint=it)},label = {Text("SHA-256 certificate fingerprint")},textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),modifier = Modifier.fillMaxWidth(),shape = RoundedCornerShape(16.dp))
-                Text("Port 3389 · TLS · 24-bit colour\nAudio and video codecs off · Text clipboard on demand",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Port 3389 · TLS · 24-bit colour\n${if(session.profile.audio) "Sound on · " else ""}Video codecs off · Text clipboard on demand",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -221,11 +231,14 @@ class MainActivity : ComponentActivity() {
     LaunchedEffect(session.toolbar) { if (!session.toolbar) session.view?.requestFocus() }
     DisposableEffect(activity) {
         activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Volume keys adjust desktop sound even between clips, not the ringer.
+        activity.volumeControlStream = AudioManager.STREAM_MUSIC
         val insets = WindowCompat.getInsetsController(activity.window,activity.window.decorView)
         insets.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         insets.hide(WindowInsetsCompat.Type.systemBars())
         onDispose {
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            activity.volumeControlStream = AudioManager.USE_DEFAULT_STREAM_TYPE
             insets.show(WindowInsetsCompat.Type.systemBars())
             session.key(0xa2,false); session.key(0xa4,false)
         }

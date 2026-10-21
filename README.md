@@ -16,7 +16,10 @@ Presets set the desktop height (Fast 800, Balanced 1000, Sharp 1200 px); the wid
 follows the tablet's screen shape so the desktop fills it without bars. On a
 OnePlus Pad 2 Pro (3392×2400) Sharp is 1696×1200, an exact 2× scale. Each
 connection uses 24-bit colour, TLS, bitmap compression, and no H.264 / RemoteFX /
-audio / desktop effects. These are starting settings, not a measured claim of
+desktop effects. **Desktop sound** (on by default) plays the VPS's audio through
+AAudio, falling back to OpenSL ES; turn it off to save a little VPS work. During a
+session the volume keys set media volume, and keyboard media keys
+(play/pause, next, previous, stop) go to the desktop. These are starting settings, not a measured claim of
 superiority over other clients.
 
 The session is full screen. The toolbar hides a moment after connecting; tap the
@@ -77,7 +80,7 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/android-ndk-r29"
 ```
 
 The first native build fetches hash-verified dependencies using FreeRDP's
-superbuild. Optional video/image/audio codecs are disabled for this use case.
+superbuild. Optional video/image codecs and compressed audio codecs (Opus, AAC, MP3) are disabled; sound is PCM/ADPCM for this use case.
 Builds use two jobs. On an ARM Linux host the script makes a local hard-linked
 NDK overlay and uses the host's LLVM 18 with the NDK's Android sysroot and
 compiler runtime; the original SDK is unchanged. On x86 Linux it uses the NDK
