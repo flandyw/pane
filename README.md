@@ -7,8 +7,9 @@ Ubuntu / XFCE / xrdp VPS. Native FreeRDP 3.32.2, Material 3 Expressive, Android 
 
 Download the signed APK from https://pane.flandolf.me/releases/latest.
 Allow your browser to install apps when Android asks. Open Tailscale and connect
-to the same tailnet as the VPS, then open Pane. The private address, username and
-server certificate SHA-256 are prefilled. Enter your Linux password and tap
+to the same tailnet as the VPS, then open Pane. Enter the VPS's Tailscale address, your Linux
+username and the server certificate SHA-256 (see below); Pane remembers them,
+but not the password. Enter your Linux password and tap
 **Open desktop**. The password is held for the connection only and never saved.
 
 Presets set the desktop height (Fast 800, Balanced 1000, Sharp 1200 px); the width

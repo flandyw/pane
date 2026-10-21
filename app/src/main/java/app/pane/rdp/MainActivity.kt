@@ -94,7 +94,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun Home(session: RdpSession) {
     var password by remember { mutableStateOf("") }
-    var advanced by remember { mutableStateOf(false) }
+    // A new install has no pin yet, so start with the certificate field visible.
+    var advanced by remember { mutableStateOf(session.profile.normalizedPin().isEmpty()) }
     val context = LocalContext.current
     val passwordFocus = remember { FocusRequester() }
     // With the keyboard cover attached, land in the password field: type it and press Enter.

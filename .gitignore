@@ -3,6 +3,11 @@
 **/build/
 local.properties
 .signing/
+# Defence in depth: signing keys never belong in Git, wherever they are placed.
+*.p12
+*.jks
+*.keystore
+*.pem
 *.log
 
 app/src/main/jniLibs/

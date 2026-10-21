@@ -21,7 +21,7 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
     private val prefs = app.getSharedPreferences("pane", 0)
     var profile by mutableStateOf(Profile(
         host = prefs.getString("host", null) ?: Profile().host,
-        username = prefs.getString("username", "ubuntu")!!,
+        username = prefs.getString("username", null) ?: Profile().username,
         fingerprint = prefs.getString("pin", null) ?: Profile().fingerprint,
         quality = Quality.entries.firstOrNull { it.name == prefs.getString("quality", "BALANCED") } ?: Quality.BALANCED
     ))

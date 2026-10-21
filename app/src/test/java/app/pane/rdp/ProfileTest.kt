@@ -5,8 +5,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProfileTest {
+    private val valid = Profile(host="pane.tail123.ts.net", username="user", fingerprint="AB".repeat(32))
+    @Test fun newInstallsStartBlank() { assertNotNull(Profile().error()) }
     @Test fun cpuProfileUsesPinnedTlsWithoutVideoOrEffects() {
-        val args = Profile().arguments("test-only")
+        val args = valid.arguments("test-only")
         assertTrue(args.contains("/sec:tls"))
         assertTrue(args.contains("/size:1600x1000"))
         assertTrue(args.contains("/bpp:24"))
@@ -17,13 +19,13 @@ class ProfileTest {
     }
     @Test fun rejectsMalformedEndpointsAndPins() {
         listOf("", "host:3389", "https://host", "host/path", "a\n/log-level:TRACE").forEach {
-            assertNotNull(Profile(host=it).error())
+            assertNotNull(valid.copy(host=it).error())
         }
-        assertNotNull(Profile(fingerprint="AB").error())
-        assertNotNull(Profile(fingerprint="Z".repeat(64)).error())
-        assertNotNull(Profile(username="ubuntu\n").error())
-        assertNull(Profile(host="armvps.tail123.ts.net").error())
-        assertNull(Profile(fingerprint=Profile().fingerprint.chunked(2).joinToString(":")).error())
+        assertNotNull(valid.copy(fingerprint="AB").error())
+        assertNotNull(valid.copy(fingerprint="Z".repeat(64)).error())
+        assertNotNull(valid.copy(username="ubuntu\n").error())
+        assertNull(valid.copy(host="armvps.tail123.ts.net").error())
+        assertNull(valid.copy(fingerprint=valid.fingerprint.chunked(2).joinToString(":")).error())
     }
     @Test fun resolutionPresetsStayWithinServerBudget() {
         assertEquals(1280,Quality.FAST.width(1.6f))
@@ -34,11 +36,11 @@ class ProfileTest {
     }
     @Test fun sharpIsExactlyHalfAOnePlusPad2Pro() {
         assertEquals(1696,Quality.SHARP.width(3392f/2400f))
-        assertTrue(Profile(quality=Quality.SHARP).arguments("x",3392f/2400f).contains("/size:1696x1200"))
+        assertTrue(valid.copy(quality=Quality.SHARP).arguments("x",3392f/2400f).contains("/size:1696x1200"))
     }
     @Test fun argumentsKeepPasswordAndUserAsSeparateValues() {
         val password="space : slash / and ü"
-        val args=Profile().arguments(password)
+        val args=valid.arguments(password)
         assertEquals(1,args.count { it.startsWith("/p:") })
         assertEquals("/p:$password",args.first { it.startsWith("/p:") })
     }
