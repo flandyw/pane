@@ -108,7 +108,20 @@ curl -f https://pane.flandolf.me/releases/latest.json
 Configured domain: `pane.flandolf.me`; service: `pane-releases`; loopback port:
 8789. HTTPS terminates in Nginx, Certbot renews it, Cloudflare is configured.
 The Go service has read-only release storage and no upload API. Existing apps'
-release services aren't changed. Update installation is manual through Android.
+release services aren't changed.
+
+## Updates
+
+Pane checks `latest.json` each time it opens and downloads a newer build in the
+background. The APK must come from `https://pane.flandolf.me/releases/`, match
+the published size and SHA-256, and carry Pane's package and version code;
+Android also requires the same signing key. The first update shows **Update to
+x.y.z**: tap it and allow Pane under *Install unknown apps*. After that, Pane
+tries a silent self-update (Android 12+, `USER_ACTION_NOT_REQUIRED`) whenever you
+leave the app with no desktop open, so the next launch is the new version. If
+Android still asks for confirmation, the button stays until you tap it.
+Installs never start during a session. Builds before 0.2.0 must be updated
+once by hand.
 
 ## Validation
 

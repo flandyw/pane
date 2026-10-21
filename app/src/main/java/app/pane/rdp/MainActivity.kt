@@ -9,10 +9,12 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -52,7 +54,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 
 private val Ink = Color(0xFF20212A)
@@ -64,6 +65,14 @@ private val Bar = Color(0xFF252631)
 private val OnBar = Color(0xFFEFEDF7)
 
 class MainActivity : ComponentActivity() {
+    private val session: RdpSession by viewModels()
+    override fun onStart() { super.onStart(); Updater.foreground = true; Updater.check(this) }
+    override fun onStop() {
+        super.onStop()
+        Updater.foreground = false
+        // Leaving Pane while no desktop is open is the quiet moment for a silent self-update.
+        if (session.phase == Phase.IDLE && !isChangingConfigurations) Updater.install(this, background = true)
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -75,7 +84,6 @@ class MainActivity : ComponentActivity() {
                 background = Paper, onBackground = Ink,
                 surface = Paper, onSurface = Ink, surfaceContainer = Color(0xFFEDEBF5)
             )) {
-                val session: RdpSession = viewModel()
                 Surface(Modifier.fillMaxSize()) {
                     if (session.phase == Phase.IDLE) Home(session) else Remote(session)
                 }
@@ -103,6 +111,15 @@ class MainActivity : ComponentActivity() {
             }
             Text("Pane",Modifier.padding(start = 12.dp),style = MaterialTheme.typography.titleLarge,fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
+            if (Updater.status.isNotEmpty()) Text(Updater.status,Modifier.padding(end = 12.dp),style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Updater.ready?.let { version ->
+                FilledTonalButton(onClick = {
+                    // Allowing Pane as an install source once lets later updates install silently.
+                    if (!context.packageManager.canRequestPackageInstalls())
+                        context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${context.packageName}")))
+                    else Updater.install(context,background = false)
+                }) { Text("Update to $version") }
+            }
             TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://pane.flandolf.me/releases/"))) }) { Text("Builds ↗") }
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
