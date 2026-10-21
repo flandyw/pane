@@ -2,8 +2,10 @@ package app.pane.rdp
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.Point
 import android.os.Handler
 import android.os.Looper
+import android.view.WindowManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -27,8 +29,14 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
     var message by mutableStateOf(""); private set
     var remoteClipboard by mutableStateOf(""); private set
     var trackpad by mutableStateOf(prefs.getBoolean("trackpad", true))
+    var toolbar by mutableStateOf(true)
+    /** Long/short ratio of the physical screen, so the remote desktop fills it in either orientation. */
+    val aspect: Float = Point().also {
+        @Suppress("DEPRECATION") app.getSystemService(WindowManager::class.java).defaultDisplay.getRealSize(it)
+    }.let { maxOf(it.x,it.y).toFloat()/minOf(it.x,it.y).coerceAtLeast(1) }
+    val size get() = "${profile.quality.width(aspect)} × ${profile.quality.height}"
     val frameLock = Any()
-    var bitmap: Bitmap? = null; private set
+    @Volatile var bitmap: Bitmap? = null; private set
     var cursor: Bitmap? = null; private set
     var cursorHotX = 0; private set
     var cursorHotY = 0; private set
@@ -54,8 +62,9 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
             .putString("pin", profile.normalizedPin()).putString("quality", profile.quality.name).apply()
         phase = Phase.CONNECTING
         message = ""
+        toolbar = true
         requestedStop = false
-        val args = profile.arguments(password)
+        val args = profile.arguments(password, aspect)
         worker.execute {
             try {
                 synchronized(nativeLock) {

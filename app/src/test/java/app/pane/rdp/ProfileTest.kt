@@ -26,9 +26,15 @@ class ProfileTest {
         assertNull(Profile(fingerprint=Profile().fingerprint.chunked(2).joinToString(":")).error())
     }
     @Test fun resolutionPresetsStayWithinServerBudget() {
-        assertEquals(1280*800,Quality.FAST.width*Quality.FAST.height)
-        assertTrue(Quality.entries.all { it.width<=1920 && it.height<=1200 })
-        assertTrue(Quality.entries.zipWithNext().all { (a,b) -> a.width*a.height < b.width*b.height })
+        assertEquals(1280,Quality.FAST.width(1.6f))
+        listOf(1.0f,1.4133f,1.6f,2.4f).forEach { aspect ->
+            assertTrue(Quality.entries.all { it.width(aspect)<=1920 && it.height<=1200 && it.width(aspect)%8==0 })
+            assertTrue(Quality.entries.zipWithNext().all { (a,b) -> a.width(aspect)*a.height < b.width(aspect)*b.height })
+        }
+    }
+    @Test fun sharpIsExactlyHalfAOnePlusPad2Pro() {
+        assertEquals(1696,Quality.SHARP.width(3392f/2400f))
+        assertTrue(Profile(quality=Quality.SHARP).arguments("x",3392f/2400f).contains("/size:1696x1200"))
     }
     @Test fun argumentsKeepPasswordAndUserAsSeparateValues() {
         val password="space : slash / and ü"
@@ -42,6 +48,8 @@ class ProfileTest {
         assertEquals(0x7b,virtualKey(KeyEvent.KEYCODE_F12))
         assertEquals(0x25,virtualKey(KeyEvent.KEYCODE_DPAD_LEFT))
         assertEquals(0x2e,virtualKey(KeyEvent.KEYCODE_FORWARD_DEL))
+        assertEquals(0x2d,virtualKey(KeyEvent.KEYCODE_INSERT))
+        assertEquals(0x65,virtualKey(KeyEvent.KEYCODE_NUMPAD_5))
         assertNull(virtualKey(KeyEvent.KEYCODE_VOLUME_UP))
     }
 }

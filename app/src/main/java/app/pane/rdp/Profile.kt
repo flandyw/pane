@@ -1,9 +1,11 @@
 package app.pane.rdp
 
-enum class Quality(val label: String, val width: Int, val height: Int, val detail: String) {
-    FAST("Fast", 1280, 800, "Less work for the VPS"),
-    BALANCED("Balanced", 1600, 1000, "A good place to start"),
-    SHARP("Sharp", 1920, 1200, "More room for code")
+enum class Quality(val label: String, val height: Int, val detail: String) {
+    FAST("Fast", 800, "Less work for the VPS"),
+    BALANCED("Balanced", 1000, "A good place to start"),
+    SHARP("Sharp", 1200, "Exactly 2× on a 2400-pixel-tall tablet");
+    // Match the screen's shape so the desktop fills it without bars; capped at 16:10 to stay within the VPS budget.
+    fun width(aspect: Float) = (height*aspect.coerceIn(1.25f, 1.6f)).toInt()/8*8
 }
 
 data class Profile(
@@ -19,12 +21,12 @@ data class Profile(
         else -> null
     }
     fun normalizedPin() = fingerprint.replace(":", "").replace(" ", "").trim()
-    fun arguments(password: String): Array<String> {
+    fun arguments(password: String, aspect: Float = 1.6f): Array<String> {
         require(error() == null)
         require(password.isNotEmpty())
         return arrayOf(
             "Pane", "/v:$host:3389", "/u:$username", "/p:$password",
-            "/size:${quality.width}x${quality.height}", "/bpp:24", "/gdi:sw",
+            "/size:${quality.width(aspect)}x${quality.height}", "/bpp:24", "/gdi:sw",
             "/sec:tls", "/cert:deny,fingerprint:sha256:${normalizedPin()}",
             "/timeout:10000", "/network:lan", "/compression", "/compression-level:2",
             "-wallpaper", "-window-drag", "-menu-anims", "-aero", "+fonts",

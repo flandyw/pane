@@ -11,17 +11,29 @@ to the same tailnet as the VPS, then open Pane. The private address, username an
 server certificate SHA-256 are prefilled. Enter your Linux password and tap
 **Open desktop**. The password is held for the connection only and never saved.
 
-Start with **Balanced** (1600×1000); use **Fast** (1280×800) if the server struggles
-or **Sharp** (1920×1200) for more workspace. Each connection uses 24-bit colour,
-TLS, bitmap compression, and no H.264 / RemoteFX / audio / desktop effects.
-These are starting settings, not a measured claim of superiority over other clients.
+Presets set the desktop height (Fast 800, Balanced 1000, Sharp 1200 px); the width
+follows the tablet's screen shape so the desktop fills it without bars. On a
+OnePlus Pad 2 Pro (3392×2400) Sharp is 1696×1200, an exact 2× scale. Each
+connection uses 24-bit colour, TLS, bitmap compression, and no H.264 / RemoteFX /
+audio / desktop effects. These are starting settings, not a measured claim of
+superiority over other clients.
 
-Trackpad is the default. Tap to click, hold to right click, double tap and hold
-to drag. Two fingers scroll; pinch to zoom. When zoomed, the viewport follows
-the pointer. Switch to direct touch in the session toolbar. Bluetooth keyboards
-and mice work too. The keyboard button opens the Android keyboard; Ctrl and Alt
-in the shortcut bar toggle until tapped again. Clipboard transfer is explicit in
-the session menu. Disconnect leaves your applications running on the VPS.
+The session is full screen. The toolbar hides a moment after connecting; tap the
+handle at the top, press Back, or press **Ctrl+Alt+Home** to bring it back. With
+the keyboard cover attached, the password field is focused on launch (type it and
+press Enter), every key goes to the desktop, and the on-screen shortcut bar is
+hidden. Android keeps a few system shortcuts, such as Meta combinations. The
+cover's trackpad drives the remote cursor directly (Android's own arrow is
+hidden): click or tap to click, two-finger click to right click, two fingers
+scroll vertically and horizontally.
+
+On the touchscreen, trackpad mode is the default. Tap to click, hold to right
+click, double tap and hold to drag. Two fingers scroll; pinch to zoom. When
+zoomed, the viewport follows the pointer. Switch to direct touch in the toolbar.
+The keyboard button (shown without a physical keyboard) opens the Android
+keyboard; Ctrl and Alt in the shortcut bar toggle until tapped again. Clipboard
+transfer is explicit in the toolbar. Disconnect leaves your applications running
+on the VPS.
 
 ## Rendering and security
 

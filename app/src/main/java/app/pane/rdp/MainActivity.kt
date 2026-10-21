@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
@@ -13,7 +14,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,12 +30,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +59,9 @@ private val Ink = Color(0xFF20212A)
 private val Purple = Color(0xFF5652C9)
 private val Paper = Color(0xFFF7F6FC)
 private val Lime = Color(0xFFD4EA98)
+private val Desk = Color(0xFF14151C)
+private val Bar = Color(0xFF252631)
+private val OnBar = Color(0xFFEFEDF7)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,6 +88,10 @@ class MainActivity : ComponentActivity() {
     var password by remember { mutableStateOf("") }
     var advanced by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val passwordFocus = remember { FocusRequester() }
+    // With the keyboard cover attached, land in the password field: type it and press Enter.
+    val hardKeyboard = LocalConfiguration.current.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+    LaunchedEffect(hardKeyboard) { if (hardKeyboard) runCatching { passwordFocus.requestFocus() } }
     val connect = {
         session.connect(password)
         if (session.phase != Phase.IDLE) password = ""
@@ -93,11 +110,11 @@ class MainActivity : ComponentActivity() {
             if (wide) Row(Modifier.fillMaxSize(),horizontalArrangement = Arrangement.spacedBy(40.dp),verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(0.9f).verticalScroll(rememberScrollState())) { Introduction() }
                 Column(Modifier.weight(1.1f).widthIn(max = 560.dp).verticalScroll(rememberScrollState())) {
-                    ConnectCard(session,password,{password=it},advanced,{advanced=!advanced},connect)
+                    ConnectCard(session,password,{password=it},passwordFocus,advanced,{advanced=!advanced},connect)
                 }
             } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement = Arrangement.spacedBy(24.dp)) {
                 Introduction()
-                ConnectCard(session,password,{password=it},advanced,{advanced=!advanced},connect)
+                ConnectCard(session,password,{password=it},passwordFocus,advanced,{advanced=!advanced},connect)
             }
         }
         Text("PRIVATE CONNECTION  ·  NATIVE RDP",Modifier.padding(vertical = 18.dp),style = MaterialTheme.typography.labelSmall,color = MaterialTheme.colorScheme.onSurfaceVariant,letterSpacing = 1.8.sp)
@@ -126,7 +143,7 @@ class MainActivity : ComponentActivity() {
     Spacer(Modifier.height(24.dp))
 }
 
-@Composable private fun ConnectCard(session: RdpSession,password: String,onPassword: (String)->Unit,advanced: Boolean,onAdvanced: ()->Unit,connect: ()->Unit) {
+@Composable private fun ConnectCard(session: RdpSession,password: String,onPassword: (String)->Unit,passwordFocus: FocusRequester,advanced: Boolean,onAdvanced: ()->Unit,connect: ()->Unit) {
     Surface(shape = RoundedCornerShape(32.dp),color = Color.White) {
         Column(Modifier.padding(24.dp),verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -139,7 +156,7 @@ class MainActivity : ComponentActivity() {
             OutlinedTextField(value = session.profile.host,onValueChange = {session.profile=session.profile.copy(host=it.trim())},label = {Text("Tailscale address")},supportingText = {Text("Keep Tailscale connected on your tablet.")},singleLine = true,modifier = Modifier.fillMaxWidth(),shape = RoundedCornerShape(16.dp),keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri,imeAction = ImeAction.Next))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(value = session.profile.username,onValueChange = {session.profile=session.profile.copy(username=it)},label = {Text("Username")},singleLine = true,modifier = Modifier.weight(1f),shape = RoundedCornerShape(16.dp),keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next))
-                OutlinedTextField(value = password,onValueChange = onPassword,label = {Text("Password")},singleLine = true,modifier = Modifier.weight(1f),shape = RoundedCornerShape(16.dp),visualTransformation = PasswordVisualTransformation(),keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password,imeAction = ImeAction.Go),keyboardActions = KeyboardActions(onGo={connect()}))
+                OutlinedTextField(value = password,onValueChange = onPassword,label = {Text("Password")},singleLine = true,modifier = Modifier.weight(1f).focusRequester(passwordFocus),shape = RoundedCornerShape(16.dp),visualTransformation = PasswordVisualTransformation(),keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password,imeAction = ImeAction.Go),keyboardActions = KeyboardActions(onGo={connect()}))
             }
             Text("Password stays in this session. Never saved.",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Make room. Keep it light.",style = MaterialTheme.typography.titleMedium)
@@ -148,7 +165,7 @@ class MainActivity : ComponentActivity() {
                     SegmentedButton(selected = session.profile.quality == quality,onClick = {session.profile=session.profile.copy(quality=quality)},shape = SegmentedButtonDefaults.itemShape(index,Quality.entries.size)) { Text(quality.label) }
                 }
             }
-            Text("${session.profile.quality.width} × ${session.profile.quality.height}  ·  ${session.profile.quality.detail}",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("${session.size}  ·  ${session.profile.quality.detail}",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (session.message.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.errorContainer,shape = RoundedCornerShape(16.dp)) {
                 Text(session.message,Modifier.padding(16.dp),style = MaterialTheme.typography.bodyMedium,color = MaterialTheme.colorScheme.onErrorContainer)
             }
@@ -172,7 +189,6 @@ class MainActivity : ComponentActivity() {
 @Composable private fun Remote(session: RdpSession) {
     val context = LocalContext.current
     val activity = context as ComponentActivity
-    var more by remember { mutableStateOf(false) }
     var clipboard by remember { mutableStateOf(false) }
     var help by remember { mutableStateOf(false) }
     var confirmExit by remember { mutableStateOf(false) }
@@ -180,7 +196,11 @@ class MainActivity : ComponentActivity() {
     var alt by remember { mutableStateOf(false) }
     var redraws by remember { mutableIntStateOf(0) }
     val ready = session.phase == Phase.CONNECTED
+    // The OnePlus keyboard cover and Bluetooth keyboards both report as a hard keyboard.
+    val hardKeyboard = LocalConfiguration.current.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
     LaunchedEffect(session) { while(true) { delay(1000); redraws=session.paints.getAndSet(0) } }
+    LaunchedEffect(ready) { if (ready) { delay(2500); session.toolbar=false } }
+    LaunchedEffect(session.toolbar) { if (!session.toolbar) session.view?.requestFocus() }
     DisposableEffect(activity) {
         activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val insets = WindowCompat.getInsetsController(activity.window,activity.window.decorView)
@@ -192,37 +212,45 @@ class MainActivity : ComponentActivity() {
             session.key(0xa2,false); session.key(0xa4,false)
         }
     }
-    BackHandler { confirmExit=true }
-    Column(Modifier.fillMaxSize().background(Color(0xFF14151C)).safeDrawingPadding().imePadding()) {
-        Surface(color = Color(0xFF252631),contentColor = Color(0xFFEFEDF7)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp,vertical = 4.dp),verticalAlignment = Alignment.CenterVertically) {
-                Text("Pane",style = MaterialTheme.typography.titleMedium,fontWeight = FontWeight.Bold)
-                Text("  /  ${session.profile.host}",Modifier.weight(1f),style = MaterialTheme.typography.labelMedium,maxLines = 1)
-                TextButton(enabled=ready,onClick = {session.toggleTrackpad()}) { Text(if(session.trackpad) "Trackpad" else "Direct touch",color = Lime) }
-                TextButton(enabled=ready,onClick = {session.view?.keyboard()}) { Text("Keyboard",color = Color(0xFFE5E1FF)) }
-                Box {
-                    IconButton(onClick={more=true}) { Icon(Icons.Default.MoreVert,"Session options") }
-                    DropdownMenu(expanded=more,onDismissRequest={more=false}) {
-                        DropdownMenuItem(text={Text("Clipboard")},onClick={more=false;clipboard=true},enabled=ready)
-                        DropdownMenuItem(text={Text("Reset zoom")},onClick={more=false;session.view?.resetZoom()},enabled=ready)
-                        DropdownMenuItem(text={Text("Controls & session info")},onClick={more=false;help=true})
-                    }
-                }
-                IconButton(onClick={confirmExit=true}) { Icon(Icons.Default.Close,"Disconnect") }
-            }
-        }
+    BackHandler { if (session.toolbar) confirmExit=true else session.toolbar=true }
+    Column(Modifier.fillMaxSize().background(Desk).windowInsetsPadding(WindowInsets.displayCutout).imePadding()) {
+        // The desktop owns the whole screen; controls float over it and hide while you work.
         Box(Modifier.weight(1f).fillMaxWidth()) {
             AndroidView(factory={DesktopView(it,session)},modifier=Modifier.fillMaxSize())
             if (!ready) Surface(Modifier.align(Alignment.Center),shape=RoundedCornerShape(32.dp),color=Color(0xFFE5E1FF)) {
                 Column(Modifier.padding(32.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(16.dp)) {
                     LoadingIndicator()
                     Text(if(session.phase==Phase.DISCONNECTING) "Closing session…" else "Opening your desktop…",style=MaterialTheme.typography.titleMedium)
-                    Text("${session.profile.quality.width} × ${session.profile.quality.height} · TLS",style=MaterialTheme.typography.bodySmall)
+                    Text("${session.size} · TLS",style=MaterialTheme.typography.bodySmall)
                     TextButton(onClick={session.disconnect()},enabled=session.phase!=Phase.DISCONNECTING) {Text("Cancel")}
                 }
             }
+            androidx.compose.animation.AnimatedVisibility(session.toolbar,Modifier.align(Alignment.TopCenter).padding(top=12.dp),enter=slideInVertically{-it}+fadeIn(),exit=slideOutVertically{-it}+fadeOut()) {
+                Surface(shape=RoundedCornerShape(50),color=Bar,contentColor=OnBar,shadowElevation=8.dp) {
+                    Row(Modifier.padding(start=20.dp,end=6.dp).height(56.dp),verticalAlignment=Alignment.CenterVertically) {
+                        Surface(shape=RoundedCornerShape(50),color=if(ready) Lime else Color(0xFF8C8AA0)) { Box(Modifier.size(8.dp)) }
+                        Column(Modifier.padding(start=12.dp,end=12.dp)) {
+                            Text(session.profile.host,style=MaterialTheme.typography.labelLarge,maxLines=1)
+                            Text("${session.size}  ·  Ctrl+Alt+Home",style=MaterialTheme.typography.labelSmall,color=OnBar.copy(alpha=0.6f),maxLines=1)
+                        }
+                        VerticalDivider(Modifier.height(28.dp).padding(horizontal=4.dp),color=OnBar.copy(alpha=0.15f))
+                        TextButton(enabled=ready,onClick={session.toggleTrackpad()}) { Text(if(session.trackpad) "Touch: trackpad" else "Touch: direct",color=Lime) }
+                        if (!hardKeyboard) TextButton(enabled=ready,onClick={session.toolbar=false;session.view?.keyboard()}) { Text("Keyboard",color=OnBar) }
+                        TextButton(enabled=ready,onClick={clipboard=true}) { Text("Clipboard",color=OnBar) }
+                        TextButton(enabled=ready,onClick={session.view?.resetZoom()}) { Text("Fit",color=OnBar) }
+                        IconButton(onClick={help=true}) { Icon(Icons.Default.Info,"Controls and session info") }
+                        IconButton(onClick={confirmExit=true}) { Icon(Icons.Default.Close,"Disconnect") }
+                        FilledTonalIconButton(enabled=ready,onClick={session.toolbar=false}) { Icon(Icons.Default.KeyboardArrowUp,"Hide toolbar") }
+                    }
+                }
+            }
+            // A small handle keeps the toolbar reachable by touch without covering much of the remote panel.
+            if (!session.toolbar) Box(Modifier.align(Alignment.TopCenter).size(96.dp,20.dp).clickable(onClickLabel="Show toolbar"){session.toolbar=true},contentAlignment=Alignment.Center) {
+                Surface(shape=RoundedCornerShape(50),color=OnBar.copy(alpha=0.45f)) { Box(Modifier.size(56.dp,5.dp)) }
+            }
         }
-        Surface(color=Color(0xFF252631)) {
+        // On-screen modifiers only matter without a physical keyboard.
+        if (!hardKeyboard) Surface(color=Bar) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically) {
                 FilterChip(selected=ctrl,onClick={ctrl=!ctrl;session.key(0xa2,ctrl);session.view?.requestFocus()},label={Text("Ctrl")},enabled=ready)
                 FilterChip(selected=alt,onClick={alt=!alt;session.key(0xa4,alt);session.view?.requestFocus()},label={Text("Alt")},enabled=ready)
@@ -234,9 +262,10 @@ class MainActivity : ComponentActivity() {
     }
     if(confirmExit) AlertDialog(onDismissRequest={confirmExit=false},title={Text("Leave your desktop?")},text={Text("Your apps keep running on the VPS. Reconnect when you’re ready.")},confirmButton={TextButton(onClick={confirmExit=false;session.disconnect()}){Text("Disconnect")}},dismissButton={TextButton(onClick={confirmExit=false}){Text("Stay")}})
     if(help) AlertDialog(onDismissRequest={help=false},title={Text("A little help")},text={Column(verticalArrangement=Arrangement.spacedBy(16.dp)) {
-        Text("Tap to click. Hold to right click. Double tap and hold to drag. Two fingers scroll; pinch to zoom. Trackpad mode moves the pointer like a laptop.")
-        Text("Bluetooth keyboards and mice work too. Ctrl and Alt stay held until tapped again.")
-        Text("${session.profile.quality.width} × ${session.profile.quality.height} · 24-bit · TLS\n$redraws redraws in the last second",style=MaterialTheme.typography.bodySmall)
+        Text("Keyboard cover: every key goes to the desktop. Ctrl+Alt+Home shows or hides this toolbar. Android keeps a few system shortcuts, such as Meta combinations.")
+        Text("Trackpad: click or tap to click, two-finger click for right click, two fingers scroll in both directions.")
+        Text("Touchscreen: tap to click, hold to right click, double tap and hold to drag. Two fingers scroll; pinch to zoom. In trackpad mode the screen moves the pointer like a laptop.")
+        Text("${session.size} · 24-bit · TLS\n$redraws redraws in the last second",style=MaterialTheme.typography.bodySmall)
         Text("Redraws depend on screen activity; this is not a network latency measurement.",style=MaterialTheme.typography.bodySmall)
     }},confirmButton={TextButton(onClick={help=false}){Text("Got it")}})
     if(clipboard) AlertDialog(onDismissRequest={clipboard=false},title={Text("Clipboard")},text={Text("Clipboard access happens only when you ask. Images and files aren’t transferred.")},confirmButton={TextButton(onClick={
