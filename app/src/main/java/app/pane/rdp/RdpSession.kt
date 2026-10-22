@@ -28,6 +28,7 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
     ))
     var phase by mutableStateOf(Phase.IDLE); private set
     var message by mutableStateOf(""); private set
+    var rememberPassword by mutableStateOf(prefs.getBoolean("remember_password", false)); private set
     var remoteClipboard by mutableStateOf(""); private set
     var trackpad by mutableStateOf(prefs.getBoolean("trackpad", true))
     var toolbar by mutableStateOf(true)
@@ -55,12 +56,38 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
     private var cleared = false
     @Volatile private var requestedStop = false
 
+    fun savedPassword(): String {
+        if (!rememberPassword || !profile.host.equals(prefs.getString("host", ""), ignoreCase = true) ||
+            profile.username != prefs.getString("username", "") ||
+            !profile.normalizedPin().equals(prefs.getString("pin", ""), ignoreCase = true)) return ""
+        val saved = prefs.getString("password", null) ?: return ""
+        return try { PasswordCipher.decrypt(saved, profile) } catch (_: Exception) {
+            message = "Saved password unavailable. Enter it again to replace it."
+            ""
+        }
+    }
+
+    fun updateRememberPassword(enabled: Boolean) {
+        val edit = prefs.edit().putBoolean("remember_password", enabled)
+        if (!enabled) edit.remove("password")
+        if (edit.commit()) rememberPassword = enabled
+        else message = "Could not update the saved password setting. Try again."
+    }
+
     fun connect(password: String) {
         if (phase != Phase.IDLE) return
         val error = profile.error()
         if (error != null || password.isEmpty()) { message = error ?: "Enter your Linux password."; return }
-        prefs.edit().putString("host", profile.host).putString("username", profile.username)
-            .putString("pin", profile.normalizedPin()).putString("quality", profile.quality.name).putBoolean("audio", profile.audio).apply()
+        try {
+            val edit = prefs.edit().putString("host", profile.host).putString("username", profile.username)
+                .putString("pin", profile.normalizedPin()).putString("quality", profile.quality.name).putBoolean("audio", profile.audio)
+            if (rememberPassword) edit.putString("password", PasswordCipher.encrypt(password, profile))
+            else edit.remove("password")
+            check(edit.commit())
+        } catch (_: Exception) {
+            message = "Could not save connection settings. Try again or turn off Remember password."
+            return
+        }
         phase = Phase.CONNECTING
         message = ""
         toolbar = true

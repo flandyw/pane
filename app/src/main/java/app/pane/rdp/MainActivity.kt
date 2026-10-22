@@ -96,7 +96,9 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun Home(session: RdpSession) {
-    var password by remember { mutableStateOf("") }
+    var password by remember(session.profile.host, session.profile.username, session.profile.normalizedPin()) {
+        mutableStateOf(session.savedPassword())
+    }
     // A new install has no pin yet, so start with the certificate field visible.
     var advanced by remember { mutableStateOf(session.profile.normalizedPin().isEmpty()) }
     val context = LocalContext.current
@@ -179,7 +181,13 @@ class MainActivity : ComponentActivity() {
                 OutlinedTextField(value = session.profile.username,onValueChange = {session.profile=session.profile.copy(username=it)},label = {Text("Username")},singleLine = true,modifier = Modifier.weight(1f),shape = RoundedCornerShape(16.dp),keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next))
                 OutlinedTextField(value = password,onValueChange = onPassword,label = {Text("Password")},singleLine = true,modifier = Modifier.weight(1f).focusRequester(passwordFocus),shape = RoundedCornerShape(16.dp),visualTransformation = PasswordVisualTransformation(),keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password,imeAction = ImeAction.Go),keyboardActions = KeyboardActions(onGo={connect()}))
             }
-            Text("Password stays in this session. Never saved.",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth().toggleable(session.rememberPassword,role = Role.Switch) { session.updateRememberPassword(it) },verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Remember password",style = MaterialTheme.typography.titleMedium)
+                    Text("Saved encrypted on this tablet when you open the desktop. Turn off to delete it.",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = session.rememberPassword,onCheckedChange = null)
+            }
             Text("Make room. Keep it light.",style = MaterialTheme.typography.titleMedium)
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 Quality.entries.forEachIndexed { index,quality ->

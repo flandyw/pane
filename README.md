@@ -8,9 +8,10 @@ Ubuntu / XFCE / xrdp VPS. Native FreeRDP 3.32.2, Material 3 Expressive, Android 
 Download the signed APK from https://pane.flandolf.me/releases/latest.
 Allow your browser to install apps when Android asks. Open Tailscale and connect
 to the same tailnet as the VPS, then open Pane. Enter the VPS's Tailscale address, your Linux
-username and the server certificate SHA-256 (see below); Pane remembers them,
-but not the password. Enter your Linux password and tap
-**Open desktop**. The password is held for the connection only and never saved.
+username and the server certificate SHA-256 (see below); Pane remembers them.
+Enter your Linux password and tap **Open desktop**. Enable **Remember password**
+to save it encrypted on this tablet when connecting; turn the switch off to delete
+it. The option is off by default, keeping the password in the connection only.
 
 Presets set the desktop height (Fast 800, Balanced 1000, Sharp 1200 px); the width
 follows the tablet's screen shape so the desktop fills it without bars. On a
@@ -51,8 +52,10 @@ queue. Touch clicks are sent on release, without waiting for double-tap timeout.
 The SHA-256 certificate pin is obtained directly from the VPS. A native patch
 makes a supplied pin mandatory even if a different certificate chains to a
 trusted CA. No certificate-ignore or trust-on-first-use mode. Unknown/changed
-certificate callbacks reject. Profile fields are validated; credentials aren't
-persisted, backed up, or included in logs. TLS is required; older RDP security
+certificate callbacks reject. Profile fields are validated. Remembered passwords
+use AES-GCM with a key in Android Keystore, bound to the server, username and
+certificate pin. Passwords aren't backed up or included in logs. Anyone who can
+open Pane on this tablet can use its remembered password. TLS is required; older RDP security
 is not enabled. Clipboard access is initiated by the user.
 
 If the VPS certificate is intentionally replaced, verify the new fingerprint
@@ -130,7 +133,8 @@ once by hand.
 ## Validation
 
 JVM tests cover profile validation, TLS/CPU settings, argument boundaries,
-resolution budgets and physical key mapping. Android lint and release signing
+resolution budgets, physical key mapping, and password encryption (identity
+binding, tampering and corrupt data). Android lint and release signing
 checks run before publishing. Native ABI/ELF dependency checks run on the built APK.
 The release server's own tests and health endpoint are checked during installation.
 
