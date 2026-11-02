@@ -91,6 +91,8 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
         phase = Phase.CONNECTING
         message = ""
         toolbar = true
+        remoteClipboard = ""
+        paints.set(0)
         requestedStop = false
         val args = profile.arguments(password, aspect)
         worker.execute {
@@ -136,7 +138,7 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
                 ownsListener = false
             }
             synchronized(frameLock) { bitmap = null; cursor = null }
-            main.post { message = detail; phase = Phase.IDLE; if (cleared) worker.shutdown() }
+            main.post { remoteClipboard = ""; message = detail; phase = Phase.IDLE; if (cleared) worker.shutdown() }
         }
     }
     override fun resized(width: Int, height: Int) {
@@ -151,11 +153,12 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
         // Copy while the native paint callback owns GDI, before its next update can change pixels.
         synchronized(frameLock) {
             val image = bitmap ?: return
+            if (width <= 0 || height <= 0) return
             val left = x.coerceAtLeast(0); val top = y.coerceAtLeast(0)
             val right = (x.toLong()+width).coerceAtMost(image.width.toLong()).toInt()
             val bottom = (y.toLong()+height).coerceAtMost(image.height.toLong()).toInt()
-            if (right > left && bottom > top)
-                Rdp.freerdp_update_graphics(instance, image, left, top, right-left, bottom-top)
+            if (right <= left || bottom <= top) return
+            Rdp.freerdp_update_graphics(instance, image, left, top, right-left, bottom-top)
         }
         view?.postInvalidateOnAnimation()
     }
@@ -164,7 +167,7 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
             cursorVisible = width != 0
             cursor = if (pixels != null && width in 1..384 && height in 1..384 && pixels.size >= width*height)
                 Bitmap.createBitmap(pixels,width,height,Bitmap.Config.ARGB_8888) else null
-            cursorHotX = hotX; cursorHotY = hotY
+            cursorHotX = hotX.coerceIn(0,(width-1).coerceAtLeast(0)); cursorHotY = hotY.coerceIn(0,(height-1).coerceAtLeast(0))
         }
         view?.postInvalidateOnAnimation()
     }

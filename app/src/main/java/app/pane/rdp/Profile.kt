@@ -3,9 +3,9 @@ package app.pane.rdp
 enum class Quality(val label: String, val height: Int, val detail: String) {
     FAST("Fast", 800, "Less work for the VPS"),
     BALANCED("Balanced", 1000, "A good place to start"),
-    SHARP("Sharp", 1200, "Exactly 2× on a 2400-pixel-tall tablet");
+    SHARP("Sharp", 1200, "Crisper text; more pixels to render");
     // Match the screen's shape so the desktop fills it without bars; capped at 16:10 to stay within the VPS budget.
-    fun width(aspect: Float) = (height*aspect.coerceIn(1.25f, 1.6f)).toInt()/8*8
+    fun width(aspect: Float) = (height*(if (aspect.isFinite()) aspect else 1.6f).coerceIn(1.25f, 1.6f)).toInt()/8*8
 }
 
 data class Profile(
@@ -15,13 +15,27 @@ data class Profile(
     val quality: Quality = Quality.BALANCED,
     val audio: Boolean = true
 ) {
-    fun error(): String? = when {
-        host.isBlank() || host.length > 253 || !host.matches(Regex("[a-zA-Z0-9.-]+")) -> "Enter a Tailscale IPv4 address or hostname, without a port."
-        username.isBlank() || username.length > 128 || username.any { it.isISOControl() } -> "Enter your Linux username."
-        normalizedPin().length != 64 || !normalizedPin().matches(Regex("[A-Fa-f0-9]{64}")) -> "The server certificate needs a 64-digit SHA-256 fingerprint."
-        else -> null
+    fun hostError(): String? {
+        if (host.isBlank()) return "Enter your Tailscale address."
+        if (host.length > 253 || !hostPattern.matches(host)) return "Use a hostname or IPv4 address, without a port or URL."
+        val labels = host.removeSuffix(".").split('.')
+        if (labels.any { it.isEmpty() || it.length > 63 || it.startsWith('-') || it.endsWith('-') })
+            return "Check the hostname for empty labels or misplaced hyphens."
+        if (host.all { it.isDigit() || it == '.' } &&
+            (labels.size != 4 || labels.any { (it.toIntOrNull() ?: -1) !in 0..255 }))
+            return "Enter a valid IPv4 address, such as 100.64.0.1."
+        return null
     }
-    fun normalizedPin() = fingerprint.replace(":", "").replace(" ", "").trim()
+    fun usernameError(): String? = if (username.isBlank() || username.length > 128 || username.any { it.isISOControl() })
+        "Enter your Linux username (up to 128 characters)." else null
+    fun fingerprintError(): String? = if (!pinPattern.matches(normalizedPin()))
+        "Paste all 64 hexadecimal digits of the SHA-256 fingerprint." else null
+    fun error(): String? = hostError() ?: usernameError() ?: fingerprintError()
+    fun normalizedPin() = fingerprint.filterNot { it == ':' || it.isWhitespace() }
+    companion object {
+        private val hostPattern = Regex("[a-zA-Z0-9.-]+")
+        private val pinPattern = Regex("[A-Fa-f0-9]{64}")
+    }
     fun arguments(password: String, aspect: Float = 1.6f): Array<String> {
         require(error() == null)
         require(password.isNotEmpty())

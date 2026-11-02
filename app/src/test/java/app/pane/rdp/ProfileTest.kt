@@ -57,6 +57,44 @@ class ProfileTest {
         assertNull(virtualKey(KeyEvent.KEYCODE_VOLUME_UP))
         assertEquals(0xb3,virtualKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
     }
+    @Test fun endpointLabelsAreValidated() {
+        listOf("-server", "server-", "a..b", ".server", "a".repeat(64)+".net", "999.64.0.1", "100.64.0", "1234").forEach {
+            assertNotNull(it,valid.copy(host=it).hostError())
+        }
+        listOf("server", "server-1.tail.net", "100.64.0.1", "Server.Tail.Net.").forEach {
+            assertNull(it,valid.copy(host=it).hostError())
+        }
+    }
+    @Test fun fingerprintPasteAcceptsWhitespaceWithoutAcceptingOtherCharacters() {
+        val pasted = valid.fingerprint.chunked(2).joinToString(": \n\t")
+        assertEquals(valid.fingerprint,valid.copy(fingerprint=pasted).normalizedPin())
+        assertNull(valid.copy(fingerprint=pasted).fingerprintError())
+        assertNotNull(valid.copy(fingerprint="SHA256="+valid.fingerprint).fingerprintError())
+    }
+    @Test fun errorsBelongToTheirFields() {
+        assertNull(valid.hostError()); assertNull(valid.usernameError()); assertNull(valid.fingerprintError())
+        assertNotNull(valid.copy(username="").usernameError())
+        assertNotNull(valid.copy(username="a".repeat(129)).usernameError())
+        assertNull(valid.copy(username="a".repeat(128)).usernameError())
+        assertNotNull(valid.copy(username="a\u0000b").usernameError())
+        assertEquals(Profile().hostError(),Profile().error())
+    }
+    @Test fun nonFiniteAspectsUseBalancedSafeDimensions() {
+        listOf(Float.NaN,Float.POSITIVE_INFINITY,Float.NEGATIVE_INFINITY).forEach { aspect ->
+            Quality.entries.forEach { assertEquals(it.width(1.6f),it.width(aspect)) }
+        }
+    }
+    @Test fun newKeyboardMappingsKeepVolumeLocal() {
+        assertEquals(0x0d,virtualKey(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertEquals(0xbb,virtualKey(KeyEvent.KEYCODE_NUMPAD_EQUALS))
+        assertEquals(0x6c,virtualKey(KeyEvent.KEYCODE_NUMPAD_COMMA))
+        assertNull(virtualKey(KeyEvent.KEYCODE_VOLUME_DOWN))
+        assertNull(virtualKey(KeyEvent.KEYCODE_VOLUME_MUTE))
+    }
+    @Test fun invalidProfilesAndEmptyPasswordsCannotCreateArguments() {
+        assertThrows(IllegalArgumentException::class.java) { Profile().arguments("x") }
+        assertThrows(IllegalArgumentException::class.java) { valid.arguments("") }
+    }
     private fun feed(code: Int, url: String = "https://pane.flandolf.me/releases/v0.2.0/pane-0.2.0.apk", digest: String = "sha256:"+"a".repeat(64), size: Long = 1000) =
         """{"version_code":$code,"version_name":"0.2.0","assets":[{"name":"pane-0.2.0.apk","browser_download_url":"$url","size":$size,"digest":"$digest"},{"name":"SHA256SUMS","browser_download_url":"x","size":1,"digest":"x"}]}"""
     @Test fun updateFeedOnlyAcceptsNewerReleasesFromOurOrigin() {

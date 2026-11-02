@@ -1,9 +1,9 @@
 <resources>
     <style name="Theme.Pane" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightStatusBar">@bool/pane_light_system_bars</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:colorAccent">#5652C9</item>
-        <item name="android:windowBackground">#F7F6FC</item>
+        <item name="android:windowBackground">@color/pane_window_background</item>
     </style>
 </resources>

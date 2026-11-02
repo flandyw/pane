@@ -1,0 +1,4 @@
+<resources>
+    <color name="pane_window_background">#F7F6FC</color>
+    <bool name="pane_light_system_bars">true</bool>
+</resources>

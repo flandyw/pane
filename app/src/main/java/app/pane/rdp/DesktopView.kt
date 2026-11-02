@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.PointerIcon
 import android.view.ScaleGestureDetector
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
@@ -31,6 +32,9 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     private val cursorBounds = RectF()
     private var dragging = false
     private var mousePrimaryDown = false
+    private val heldKeys = mutableSetOf<Int>()
+    private val mouseButtons = mutableSetOf<Int>()
+    private val hiddenPointer = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
     private var lastX = 0f
     private var lastY = 0f
     private var scrollX = 0f
@@ -47,13 +51,13 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         override fun onDown(e: MotionEvent) = true
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             if (!session.trackpad) position(e.x,e.y)
-            click(0x1000)
             performClick()
             return true
         }
         override fun onLongPress(e: MotionEvent) {
             if (!session.trackpad) position(e.x,e.y)
             click(0x2000)
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         }
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
             if (multiTouch) return true
@@ -79,6 +83,7 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         }
     })
     init {
+        isClickable = true
         isFocusable = true
         isFocusableInTouchMode = true
         contentDescription = "Remote desktop. Tap to click, hold to right click, double tap and hold to drag. Two fingers scroll; pinch to zoom. Ctrl+Alt+Home shows the toolbar."
@@ -86,10 +91,10 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     }
     // The remote cursor is drawn locally at the pointer, so hide Android's arrow to avoid two cursors.
     override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon =
-        PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
-    override fun onWindowFocusChanged(hasWindowFocus: Boolean) { super.onWindowFocusChanged(hasWindowFocus); if (hasWindowFocus) requestFocus() }
+        hiddenPointer
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) { super.onWindowFocusChanged(hasWindowFocus); if (hasWindowFocus) requestFocus() else releaseInput() }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); session.view = this; requestFocus() }
-    override fun onDetachedFromWindow() { if (session.view === this) session.view = null; releaseDrag(); super.onDetachedFromWindow() }
+    override fun onDetachedFromWindow() { if (session.view === this) session.view = null; releaseInput(); super.onDetachedFromWindow() }
     private fun desktopScale(): Float {
         val image = session.bitmap ?: return 1f
         return min(width.toFloat()/image.width, height.toFloat()/image.height).coerceAtLeast(0.01f)*zoom
@@ -106,14 +111,15 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         super.onDraw(canvas)
         synchronized(session.frameLock) {
             val image = session.bitmap ?: return
+            clampCursor()
             updateBounds()
+            val scale = desktopScale()
             canvas.drawBitmap(image,null,bounds,paint)
             if (session.cursorVisible) {
-                val x = bounds.left+cursorX*desktopScale()
-                val y = bounds.top+cursorY*desktopScale()
+                val x = bounds.left+cursorX*scale
+                val y = bounds.top+cursorY*scale
                 val cursor = session.cursor
                 if (cursor != null) {
-                    val scale = desktopScale()
                     cursorBounds.set(x-session.cursorHotX*scale,y-session.cursorHotY*scale,
                         x+(cursor.width-session.cursorHotX)*scale,y+(cursor.height-session.cursorHotY)*scale)
                     canvas.drawBitmap(cursor,null,cursorBounds,paint)
@@ -134,8 +140,10 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     }
     // No frameLock: bounds are UI-thread state, so input never waits on a native frame copy.
     private fun position(x: Float,y: Float) {
+        if (!x.isFinite() || !y.isFinite()) return
         updateBounds()
-        cursorX = (x-bounds.left)/desktopScale(); cursorY = (y-bounds.top)/desktopScale()
+        val scale = desktopScale()
+        cursorX = (x-bounds.left)/scale; cursorY = (y-bounds.top)/scale
         clampCursor()
     }
     private var sentX = -1
@@ -149,23 +157,26 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     }
     // xrdp turns every wheel event into one X button click, so only whole notches are sent.
     private fun notches(amount: Float, step: Float, wheel: Int): Float {
-        var left = amount
-        while (abs(left) >= step) {
-            val direction = if (left > 0) 1 else -1
-            sendMouse(wheel or ((direction*120) and 0x1ff))
-            left -= direction*step
-        }
-        return left
+        return scrollNotches(amount,step) { direction -> sendMouse(wheel or ((direction*120) and 0x1ff)) }
     }
     private fun scrollStep() = 36*resources.displayMetrics.density
-    private fun click(button: Int) { sendMouse(button or 0x8000); sendMouse(button) }
+    private fun click(button: Int) { sendMouse(button or 0x8000); sendMouse(button); postInvalidateOnAnimation() }
     private fun releaseDrag() { if (dragging) { sendMouse(0x1000); dragging = false } }
+    fun releaseInput() {
+        releaseDrag()
+        if (mousePrimaryDown) { sendMouse(0x1000); mousePrimaryDown = false }
+        mouseButtons.forEach { sendMouse(it) }
+        mouseButtons.clear()
+        heldKeys.forEach { session.key(it,false) }
+        heldKeys.clear()
+        scrollX = 0f; scrollY = 0f
+    }
     fun resetZoom() { zoom = 1f; postInvalidateOnAnimation() }
     fun keyboard() { requestFocus(); (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(this,InputMethodManager.SHOW_IMPLICIT) }
-    override fun performClick(): Boolean { super.performClick(); return true }
+    override fun performClick(): Boolean { super.performClick(); click(0x1000); return true }
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        requestFocus()
-        parent.requestDisallowInterceptTouchEvent(true)
+        if (!hasFocus()) requestFocus()
+        parent.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
         if (event.actionMasked == MotionEvent.ACTION_DOWN) session.toolbar = false
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
             // Android 14+ reports touchpad gestures as fake fingers at the pointer; they must not move it.
@@ -196,18 +207,21 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
             return true
         }
         scaler.onTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) { multiTouch = false; scrollY = 0f }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) { multiTouch = false; scrollY = 0f; scrollX = 0f }
         if (event.pointerCount > 1) {
             if (!multiTouch) {
-                multiTouch = true; lastY = event.y
+                multiTouch = true; lastY = event.y; lastX = event.x
                 val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
                 gestures.onTouchEvent(cancel)
                 cancel.recycle()
                 releaseDrag()
             }
-            if (event.actionMasked == MotionEvent.ACTION_MOVE && !scaler.isInProgress)
+            if (event.actionMasked == MotionEvent.ACTION_MOVE && !scaler.isInProgress) {
                 scrollY = notches(scrollY+event.y-lastY,scrollStep(),0x0200)
-            lastY = event.y
+                scrollX = notches(scrollX-(event.x-lastX),scrollStep(),0x0400)
+            }
+            if (scaler.isInProgress) { scrollX = 0f; scrollY = 0f }
+            lastY = event.y; lastX = event.x
             return true
         }
         if (!multiTouch) gestures.onTouchEvent(event)
@@ -216,6 +230,7 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         return true
     }
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (!event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) return super.onGenericMotionEvent(event)
         position(event.x,event.y)
         when (event.actionMasked) {
             MotionEvent.ACTION_HOVER_MOVE -> { sendMouse(0x0800); postInvalidateOnAnimation(); return true }
@@ -227,7 +242,9 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
             }
             MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> {
                 val button = when(event.actionButton) { MotionEvent.BUTTON_SECONDARY -> 0x2000; MotionEvent.BUTTON_TERTIARY -> 0x4000; else -> return true }
-                sendMouse(button or if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS) 0x8000 else 0)
+                val down = event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS
+                if (down) mouseButtons.add(button) else mouseButtons.remove(button)
+                sendMouse(button or if (down) 0x8000 else 0)
                 return true
             }
         }
@@ -257,7 +274,9 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         if (event.action == KeyEvent.ACTION_DOWN) session.toolbar = false
         val vk = virtualKey(event.keyCode)
         if (vk != null && (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP)) {
-            session.key(vk,event.action == KeyEvent.ACTION_DOWN)
+            val down = event.action == KeyEvent.ACTION_DOWN
+            if (down) heldKeys.add(vk) else heldKeys.remove(vk)
+            session.key(vk,down)
             return true
         }
         if (event.action == KeyEvent.ACTION_DOWN && event.unicodeChar != 0 && !event.isCtrlPressed && !event.isAltPressed) {
@@ -272,7 +291,7 @@ internal fun virtualKey(code: Int): Int? = when(code) {
     in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z -> 0x41+code-KeyEvent.KEYCODE_A
     in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> 0x30+code-KeyEvent.KEYCODE_0
     in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 -> 0x70+code-KeyEvent.KEYCODE_F1
-    KeyEvent.KEYCODE_ENTER,KeyEvent.KEYCODE_NUMPAD_ENTER -> 0x0d
+    KeyEvent.KEYCODE_ENTER,KeyEvent.KEYCODE_NUMPAD_ENTER,KeyEvent.KEYCODE_DPAD_CENTER -> 0x0d
     KeyEvent.KEYCODE_DEL -> 0x08
     KeyEvent.KEYCODE_FORWARD_DEL -> 0x2e
     KeyEvent.KEYCODE_INSERT -> 0x2d
@@ -280,6 +299,8 @@ internal fun virtualKey(code: Int): Int? = when(code) {
     KeyEvent.KEYCODE_NUMPAD_MULTIPLY -> 0x6a
     KeyEvent.KEYCODE_NUMPAD_ADD -> 0x6b
     KeyEvent.KEYCODE_NUMPAD_SUBTRACT -> 0x6d
+    KeyEvent.KEYCODE_NUMPAD_EQUALS -> 0xbb
+    KeyEvent.KEYCODE_NUMPAD_COMMA -> 0x6c
     KeyEvent.KEYCODE_NUMPAD_DOT -> 0x6e
     KeyEvent.KEYCODE_NUMPAD_DIVIDE -> 0x6f
     KeyEvent.KEYCODE_NUM_LOCK -> 0x90
@@ -324,4 +345,16 @@ internal fun virtualKey(code: Int): Int? = when(code) {
     KeyEvent.KEYCODE_MEDIA_PREVIOUS -> 0xb1
     KeyEvent.KEYCODE_MEDIA_STOP -> 0xb2
     else -> null
+}
+
+// A pathological input packet must not flood the native event queue.
+internal inline fun scrollNotches(amount: Float, step: Float, send: (Int)->Unit): Float {
+    if (!amount.isFinite() || !step.isFinite() || step <= 0f) return 0f
+    var left = amount.coerceIn(-step*32,step*32)
+    while (abs(left) >= step) {
+        val direction = if (left > 0) 1 else -1
+        send(direction)
+        left -= direction*step
+    }
+    return left
 }

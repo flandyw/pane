@@ -25,7 +25,7 @@ superiority over other clients.
 
 The session is full screen. The toolbar hides a moment after connecting; tap the
 handle at the top, press Back, or press **Ctrl+Alt+Home** to bring it back. With
-the keyboard cover attached, the password field is focused on launch (type it and
+the keyboard cover attached, the password field is focused when server details are valid (type it and
 press Enter), every key goes to the desktop, and the on-screen shortcut bar is
 hidden. Android keeps a few system shortcuts, such as Meta combinations. The
 cover's trackpad drives the remote cursor directly (Android's own arrow is
@@ -39,6 +39,15 @@ The keyboard button (shown without a physical keyboard) opens the Android
 keyboard; Ctrl and Alt in the shortcut bar toggle until tapped again. Clipboard
 transfer is explicit in the toolbar. Disconnect leaves your applications running
 on the VPS.
+
+The connection form adapts to phones, split-screen windows and larger text, and
+follows Android's light/dark theme. **Server verification** includes a selectable
+certificate command. Password visibility is optional; visibility is reset when
+the server or account changes. The session toolbar scrolls horizontally on narrow
+screens and stays visible when touch exploration is enabled.
+
+See [the polish ledger](docs/POLISHES.md) for the UI, input and rendering changes
+and remaining device checks.
 
 ## Rendering and security
 
@@ -65,7 +74,7 @@ in a trusted VPS terminal with:
 openssl x509 -in /etc/xrdp/cert.pem -noout -fingerprint -sha256
 ```
 
-Then update **Connection details** in Pane. RDP stays private through the VPS's
+Then update **Server verification** in Pane. RDP stays private through the VPS's
 Tailscale-only UFW rules. Pane uses the separately installed Tailscale app;
 it does not embed a VPN. No microphone, camera, storage, or file redirection.
 
@@ -133,7 +142,8 @@ once by hand.
 ## Validation
 
 JVM tests cover profile validation, TLS/CPU settings, argument boundaries,
-resolution budgets, physical key mapping, and password encryption (identity
+resolution budgets and non-finite inputs, field-specific endpoint validation, pasted
+fingerprints, bounded fractional scrolling, physical key mapping, and password encryption (identity
 binding, tampering and corrupt data). Android lint and release signing
 checks run before publishing. Native ABI/ELF dependency checks run on the built APK.
 The release server's own tests and health endpoint are checked during installation.
