@@ -5,6 +5,12 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Rect
+import android.hardware.input.InputManager
+import android.os.SystemClock
+import android.text.Selection
+import android.view.KeyCharacterMap
+import androidx.annotation.RequiresApi
 import android.os.Build
 import android.text.InputType
 import android.view.GestureDetector
@@ -31,19 +37,22 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     private val bounds = RectF()
     private val cursorBounds = RectF()
     private var dragging = false
-    private var mousePrimaryDown = false
-    private val heldKeys = mutableSetOf<Int>()
-    private val mouseButtons = mutableSetOf<Int>()
+    private val pointer = RemotePointer(::sendMouse)
+    private var connection: DesktopInputConnection? = null
+    private val inputManager = context.getSystemService(InputManager::class.java)
+    private val inputDevices = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) = Unit
+        override fun onInputDeviceRemoved(deviceId: Int) { releaseInput(); restartInput() }
+        override fun onInputDeviceChanged(deviceId: Int) { releaseInput(); restartInput() }
+    }
     private val hiddenPointer = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
     private var lastX = 0f
     private var lastY = 0f
-    private var scrollX = 0f
-    private var scrollY = 0f
+    private var gestureAxes = false
     private var multiTouch = false
     private val scaler = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
-            zoom = (zoom * detector.scaleFactor).coerceIn(1f, 2.5f)
-            postInvalidateOnAnimation()
+            scaleBy(detector.scaleFactor)
             return true
         }
     })
@@ -55,6 +64,7 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
             return true
         }
         override fun onLongPress(e: MotionEvent) {
+            if (!hasFocus() || !hasWindowFocus() || session.inputSuspended || session.phase != Phase.CONNECTED) return
             if (!session.trackpad) position(e.x,e.y)
             click(0x2000)
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -90,11 +100,34 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         setBackgroundColor(Color.rgb(20,21,28))
     }
     // The remote cursor is drawn locally at the pointer, so hide Android's arrow to avoid two cursors.
-    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon =
-        hiddenPointer
-    override fun onWindowFocusChanged(hasWindowFocus: Boolean) { super.onWindowFocusChanged(hasWindowFocus); if (hasWindowFocus) requestFocus() else releaseInput() }
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); session.view = this; requestFocus() }
-    override fun onDetachedFromWindow() { if (session.view === this) session.view = null; releaseInput(); super.onDetachedFromWindow() }
+    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? =
+        if (event.isFromSource(InputDevice.SOURCE_MOUSE)) hiddenPointer else super.onResolvePointerIcon(event,pointerIndex)
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) releaseInput() else restartInput()
+    }
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow(); session.view = this
+        inputManager.registerInputDeviceListener(inputDevices,null)
+        requestFocus()
+    }
+    override fun onDetachedFromWindow() {
+        inputManager.unregisterInputDeviceListener(inputDevices)
+        if (session.view === this) session.view = null
+        releaseInput(); super.onDetachedFromWindow()
+    }
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
+        super.onFocusChanged(gainFocus,direction,previouslyFocusedRect)
+        if (!gainFocus) { session.keyboard.releasePhysical(); pointer.release(); releaseDrag(); connection?.closeConnection(); cancelGestures() }
+    }
+    fun restartInput() {
+        if (hasFocus() && hasWindowFocus() && !session.inputSuspended) context.getSystemService(InputMethodManager::class.java).restartInput(this)
+    }
+    private fun scaleBy(factor: Float) {
+        if (!factor.isFinite() || factor <= 0f) return
+        zoom = (zoom*factor).coerceIn(1f,2.5f)
+        postInvalidateOnAnimation()
+    }
     private fun desktopScale(): Float {
         val image = session.bitmap ?: return 1f
         return min(width.toFloat()/image.width, height.toFloat()/image.height).coerceAtLeast(0.01f)*zoom
@@ -155,96 +188,148 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         sentX = x; sentY = y
         session.mouse(x,y,flags)
     }
-    // xrdp turns every wheel event into one X button click, so only whole notches are sent.
-    private fun notches(amount: Float, step: Float, wheel: Int): Float {
-        return scrollNotches(amount,step) { direction -> sendMouse(wheel or ((direction*120) and 0x1ff)) }
-    }
     private fun scrollStep() = 36*resources.displayMetrics.density
     private fun click(button: Int) { sendMouse(button or 0x8000); sendMouse(button); postInvalidateOnAnimation() }
     private fun releaseDrag() { if (dragging) { sendMouse(0x1000); dragging = false } }
     fun releaseInput() {
-        releaseDrag()
-        if (mousePrimaryDown) { sendMouse(0x1000); mousePrimaryDown = false }
-        mouseButtons.forEach { sendMouse(it) }
-        mouseButtons.clear()
-        heldKeys.forEach { session.key(it,false) }
-        heldKeys.clear()
-        scrollX = 0f; scrollY = 0f
+        releaseDrag(); pointer.release(); session.keyboard.releaseAll()
+        connection?.closeConnection()
+        cancelGestures()
+        sentX=-1; sentY=-1
     }
+    private fun cancelGestures() {
+        val now = SystemClock.uptimeMillis()
+        val cancel = MotionEvent.obtain(now,now,MotionEvent.ACTION_CANCEL,0f,0f,0)
+        gestures.onTouchEvent(cancel); scaler.onTouchEvent(cancel); cancel.recycle()
+        multiTouch=false
+    }
+    fun hideKeyboard() { context.getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(windowToken,0) }
     fun resetZoom() { zoom = 1f; postInvalidateOnAnimation() }
-    fun keyboard() { requestFocus(); (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(this,InputMethodManager.SHOW_IMPLICIT) }
-    override fun performClick(): Boolean { super.performClick(); click(0x1000); return true }
+    fun keyboard() {
+        if (session.phase != Phase.CONNECTED || session.inputSuspended) return
+        requestFocus()
+        // SHOW_IMPLICIT may be suppressed with a hardware keyboard; this is an explicit user request.
+        post { if (hasWindowFocus() && hasFocus() && session.phase == Phase.CONNECTED && !session.inputSuspended) context.getSystemService(InputMethodManager::class.java).showSoftInput(this,0) }
+    }
+    override fun performClick(): Boolean {
+        if (!hasWindowFocus() || session.inputSuspended || session.phase != Phase.CONNECTED) return false
+        super.performClick(); click(0x1000); return true
+    }
+
+    @RequiresApi(34)
+    private fun touchpadGesture(event: MotionEvent): Boolean {
+        when (event.classification) {
+            MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE -> {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    releaseDrag(); pointer.resetScroll()
+                    gestureAxes = event.device?.getMotionRange(MotionEvent.AXIS_GESTURE_SCROLL_X_DISTANCE) != null
+                    lastX=event.x; lastY=event.y
+                }
+                if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+                    val dx=event.getAxisValue(MotionEvent.AXIS_GESTURE_SCROLL_X_DISTANCE)
+                    val dy=event.getAxisValue(MotionEvent.AXIS_GESTURE_SCROLL_Y_DISTANCE)
+                    gestureAxes = gestureAxes || dx != 0f || dy != 0f
+                    if (gestureAxes) {
+                        for (h in 0 until event.historySize) pointer.scroll(
+                            event.getHistoricalAxisValue(MotionEvent.AXIS_GESTURE_SCROLL_X_DISTANCE,h),
+                            -event.getHistoricalAxisValue(MotionEvent.AXIS_GESTURE_SCROLL_Y_DISTANCE,h),scrollStep(),2,event.deviceId)
+                        pointer.scroll(dx,-dy,scrollStep(),2,event.deviceId)
+                    } else pointer.scroll(-(event.x-lastX),event.y-lastY,scrollStep(),2,event.deviceId)
+                }
+                lastX=event.x; lastY=event.y
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) pointer.resetScroll()
+                return true
+            }
+            MotionEvent.CLASSIFICATION_PINCH -> {
+                pointer.resetScroll()
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    releaseDrag()
+                    gestureAxes=event.device?.getMotionRange(MotionEvent.AXIS_GESTURE_PINCH_SCALE_FACTOR) != null
+                }
+                val factor=event.getAxisValue(MotionEvent.AXIS_GESTURE_PINCH_SCALE_FACTOR)
+                gestureAxes=gestureAxes || factor > 0f
+                if (gestureAxes) {
+                    if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+                        for (h in 0 until event.historySize) scaleBy(event.getHistoricalAxisValue(MotionEvent.AXIS_GESTURE_PINCH_SCALE_FACTOR,h))
+                        scaleBy(factor)
+                    }
+                } else scaler.onTouchEvent(event)
+                return true
+            }
+            // AOSP reserves this hidden classification for system three/four-finger navigation.
+            4 -> return true
+        }
+        return false
+    }
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (session.inputSuspended || session.phase != Phase.CONNECTED) return true
         if (!hasFocus()) requestFocus()
         parent.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) session.toolbar = false
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            connection?.finishComposingText()
+            session.toolbar = false
+        }
+        if (event.actionMasked == MotionEvent.ACTION_CANCEL ||
+            (Build.VERSION.SDK_INT >= 33 && event.flags and MotionEvent.FLAG_CANCELED != 0)) {
+            releaseInput()
+            return true
+        }
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
-            // Android 14+ reports touchpad gestures as fake fingers at the pointer; they must not move it.
-            if (Build.VERSION.SDK_INT >= 34) when (event.classification) {
-                MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE -> {
-                    if (event.actionMasked == MotionEvent.ACTION_MOVE) {
-                        scrollY = notches(scrollY+event.y-lastY,scrollStep(),0x0200)
-                        scrollX = notches(scrollX-(event.x-lastX),scrollStep(),0x0400)
-                    } else { scrollX = 0f; scrollY = 0f }
-                    lastX = event.x; lastY = event.y
-                    return true
-                }
-                MotionEvent.CLASSIFICATION_PINCH, 4 /* hidden CLASSIFICATION_MULTI_FINGER_SWIPE */ -> return true
-            }
+            if (Build.VERSION.SDK_INT >= 34 && touchpadGesture(event)) return true
             position(event.x,event.y)
-            when(event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> if (event.buttonState and MotionEvent.BUTTON_PRIMARY != 0) {
-                    mousePrimaryDown = true
-                    sendMouse(0x9000)
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (mousePrimaryDown) {
-                    mousePrimaryDown = false
-                    sendMouse(0x1000)
-                }
-                MotionEvent.ACTION_MOVE -> sendMouse(0x0800)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> pointer.buttons(event.buttonState)
+                MotionEvent.ACTION_MOVE -> { pointer.buttons(event.buttonState); sendMouse(0x0800) }
+                MotionEvent.ACTION_UP -> pointer.buttons(event.buttonState)
             }
             postInvalidateOnAnimation()
             return true
         }
         scaler.onTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) { multiTouch = false; scrollY = 0f; scrollX = 0f }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) { multiTouch=false; pointer.resetScroll() }
         if (event.pointerCount > 1) {
             if (!multiTouch) {
-                multiTouch = true; lastY = event.y; lastX = event.x
-                val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
-                gestures.onTouchEvent(cancel)
-                cancel.recycle()
-                releaseDrag()
+                multiTouch=true
+                val cancel=MotionEvent.obtain(event).apply { action=MotionEvent.ACTION_CANCEL }
+                gestures.onTouchEvent(cancel); cancel.recycle(); releaseDrag()
+                lastX=(event.getX(0)+event.getX(1))/2
+                lastY=(event.getY(0)+event.getY(1))/2
             }
-            if (event.actionMasked == MotionEvent.ACTION_MOVE && !scaler.isInProgress) {
-                scrollY = notches(scrollY+event.y-lastY,scrollStep(),0x0200)
-                scrollX = notches(scrollX-(event.x-lastX),scrollStep(),0x0400)
-            }
-            if (scaler.isInProgress) { scrollX = 0f; scrollY = 0f }
-            lastY = event.y; lastX = event.x
+            val x=(event.getX(0)+event.getX(1))/2
+            val y=(event.getY(0)+event.getY(1))/2
+            if (event.pointerCount == 2 && event.actionMasked == MotionEvent.ACTION_MOVE && !scaler.isInProgress)
+                pointer.scroll(-(x-lastX),y-lastY,scrollStep(),3,event.deviceId)
+            else pointer.resetScroll()
+            lastX=x; lastY=y
             return true
         }
         if (!multiTouch) gestures.onTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) releaseDrag()
-        lastY = event.y
+        if (event.actionMasked == MotionEvent.ACTION_UP) releaseDrag()
         return true
     }
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (!event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) return super.onGenericMotionEvent(event)
-        position(event.x,event.y)
+        if (session.inputSuspended || session.phase != Phase.CONNECTED || !hasWindowFocus() ||
+            !event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) return super.onGenericMotionEvent(event)
+        if (Build.VERSION.SDK_INT >= 34 && event.isFromSource(InputDevice.SOURCE_MOUSE) && touchpadGesture(event)) return true
         when (event.actionMasked) {
-            MotionEvent.ACTION_HOVER_MOVE -> { sendMouse(0x0800); postInvalidateOnAnimation(); return true }
+            MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_HOVER_ENTER -> {
+                position(event.x,event.y); sendMouse(0x0800); postInvalidateOnAnimation(); return true
+            }
             MotionEvent.ACTION_SCROLL -> {
-                // Precision wheels and older touchpads report fractions of a notch.
-                scrollY = notches(scrollY+event.getAxisValue(MotionEvent.AXIS_VSCROLL),1f,0x0200)
-                scrollX = notches(scrollX+event.getAxisValue(MotionEvent.AXIS_HSCROLL),1f,0x0400)
+                position(event.x,event.y)
+                for (h in 0 until event.historySize) pointer.scroll(
+                    event.getHistoricalAxisValue(MotionEvent.AXIS_HSCROLL,h),event.getHistoricalAxisValue(MotionEvent.AXIS_VSCROLL,h),1f,1,event.deviceId)
+                pointer.scroll(event.getAxisValue(MotionEvent.AXIS_HSCROLL),event.getAxisValue(MotionEvent.AXIS_VSCROLL),1f,1,event.deviceId)
+                postInvalidateOnAnimation()
                 return true
             }
             MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> {
-                val button = when(event.actionButton) { MotionEvent.BUTTON_SECONDARY -> 0x2000; MotionEvent.BUTTON_TERTIARY -> 0x4000; else -> return true }
-                val down = event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS
-                if (down) mouseButtons.add(button) else mouseButtons.remove(button)
-                sendMouse(button or if (down) 0x8000 else 0)
+                if (event.actionButton and (MotionEvent.BUTTON_PRIMARY or MotionEvent.BUTTON_SECONDARY or MotionEvent.BUTTON_TERTIARY) == 0)
+                    return super.onGenericMotionEvent(event)
+                connection?.finishComposingText()
+                position(event.x,event.y)
+                pointer.button(event.actionButton,event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS)
+                postInvalidateOnAnimation()
                 return true
             }
         }
@@ -252,39 +337,123 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     }
     override fun onCheckIsTextEditor() = true
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_ACTION_NONE
-        return object : BaseInputConnection(this,false) {
-            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean { session.text(text?.toString().orEmpty()); return true }
-            override fun setComposingText(text: CharSequence?, newCursorPosition: Int) = true
-            override fun deleteSurroundingText(beforeLength: Int,afterLength: Int): Boolean {
-                repeat(beforeLength.coerceIn(0,100)) { session.key(0x08,true); session.key(0x08,false) }
-                repeat(afterLength.coerceIn(0,100)) { session.key(0x2e,true); session.key(0x2e,false) }
-                return true
+        connection?.closeConnection()
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN or
+            EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_ACTION_NONE
+        outAttrs.initialSelStart=0; outAttrs.initialSelEnd=0; outAttrs.initialCapsMode=0
+        return DesktopInputConnection().also { connection=it }
+    }
+    // shortcut: only pending composition is local; a remote text channel is needed for surrounding-text correction.
+    private inner class DesktopInputConnection : BaseInputConnection(this@DesktopView,true) {
+        private var closed=false
+        private var batchDepth=0
+        private var selectionDirty=false
+        private fun active() = !closed && hasFocus() && hasWindowFocus() && session.phase == Phase.CONNECTED && !session.inputSuspended
+        private fun selectionChanged() {
+            if (closed) return
+            if (batchDepth > 0) { selectionDirty=true; return }
+            selectionDirty=false
+            val text=editable ?: return
+            context.getSystemService(InputMethodManager::class.java).updateSelection(this@DesktopView,
+                Selection.getSelectionStart(text),Selection.getSelectionEnd(text),getComposingSpanStart(text),getComposingSpanEnd(text))
+        }
+        private fun flush() {
+            val text=editable?.toString().orEmpty()
+            editable?.clear()
+            if (text.isNotEmpty()) session.keyboard.commitText(text)
+            selectionChanged()
+        }
+        override fun beginBatchEdit(): Boolean {
+            if (!active()) return false
+            batchDepth++
+            return true
+        }
+        override fun endBatchEdit(): Boolean {
+            if (batchDepth == 0) return false
+            batchDepth--
+            if (batchDepth == 0 && selectionDirty) selectionChanged()
+            return batchDepth > 0
+        }
+        override fun setSelection(start: Int,end: Int): Boolean {
+            if (!active()) return false
+            return super.setSelection(start,end).also { selectionChanged() }
+        }
+        override fun setComposingRegion(start: Int,end: Int): Boolean {
+            if (!active()) return false
+            return super.setComposingRegion(start,end).also { selectionChanged() }
+        }
+        override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+            if (!active() || text == null || text.length > 16384) return false
+            return super.setComposingText(text,newCursorPosition).also { selectionChanged() }
+        }
+        override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+            if (!active() || text == null || text.length > 16384) return false
+            val result=super.commitText(text,newCursorPosition)
+            flush()
+            return result
+        }
+        override fun finishComposingText(): Boolean {
+            if (!active()) return false
+            super.finishComposingText()
+            flush()
+            return true
+        }
+        override fun deleteSurroundingText(beforeLength: Int,afterLength: Int): Boolean {
+            if (!active() || beforeLength < 0 || afterLength < 0) return false
+            if (editable?.isNotEmpty() == true)
+                return super.deleteSurroundingText(beforeLength.coerceAtMost(100),afterLength.coerceAtMost(100)).also { selectionChanged() }
+            repeat(beforeLength.coerceAtMost(100)) { session.keyboard.tap(0x08) }
+            repeat(afterLength.coerceAtMost(100)) { session.keyboard.tap(0x2e) }
+            return true
+        }
+        override fun deleteSurroundingTextInCodePoints(beforeLength: Int,afterLength: Int): Boolean {
+            if (!active() || beforeLength < 0 || afterLength < 0) return false
+            if (editable?.isNotEmpty() == true)
+                return super.deleteSurroundingTextInCodePoints(beforeLength.coerceAtMost(100),afterLength.coerceAtMost(100)).also { selectionChanged() }
+            return deleteSurroundingText(beforeLength,afterLength)
+        }
+        override fun performEditorAction(actionCode: Int): Boolean {
+            if (!active()) return false
+            return when (actionCode) {
+                EditorInfo.IME_ACTION_UNSPECIFIED,EditorInfo.IME_ACTION_NONE,EditorInfo.IME_ACTION_GO,
+                EditorInfo.IME_ACTION_DONE,EditorInfo.IME_ACTION_SEARCH,EditorInfo.IME_ACTION_SEND -> {
+                    finishComposingText(); session.keyboard.tap(0x0d); true
+                }
+                else -> false
             }
-            override fun sendKeyEvent(event: KeyEvent) = dispatchKeyEvent(event)
+        }
+        override fun sendKeyEvent(event: KeyEvent): Boolean {
+            if (!active()) return false
+            if (event.action == KeyEvent.ACTION_MULTIPLE && event.keyCode == KeyEvent.KEYCODE_UNKNOWN && event.characters != null)
+                return commitText(event.characters,1)
+            return handleKey(event) || super.sendKeyEvent(event)
+        }
+        override fun closeConnection() {
+            if (closed) return
+            if (active()) finishComposingText()
+            closed=true
+            editable?.clear()
+            super.closeConnection()
         }
     }
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Ctrl+Alt+Home is the mstsc connection-bar shortcut; Home itself stays local.
-        if (event.keyCode == KeyEvent.KEYCODE_MOVE_HOME && event.isCtrlPressed && event.isAltPressed) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) session.toolbar = !session.toolbar
-            return true
-        }
-        if (event.action == KeyEvent.ACTION_DOWN) session.toolbar = false
-        val vk = virtualKey(event.keyCode)
-        if (vk != null && (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP)) {
-            val down = event.action == KeyEvent.ACTION_DOWN
-            if (down) heldKeys.add(vk) else heldKeys.remove(vk)
-            session.key(vk,down)
-            return true
-        }
-        if (event.action == KeyEvent.ACTION_DOWN && event.unicodeChar != 0 && !event.isCtrlPressed && !event.isAltPressed) {
-            session.text(String(Character.toChars(event.unicodeChar)))
-            return true
-        }
-        return super.dispatchKeyEvent(event)
+    private fun handleKey(event: KeyEvent): Boolean {
+        if (session.phase != Phase.CONNECTED || session.inputSuspended || !hasWindowFocus()) return false
+        val unicode=event.unicodeChar
+        if (event.action == KeyEvent.ACTION_DOWN && !KeyEvent.isModifierKey(event.keyCode) &&
+            (virtualKey(event.keyCode) != null || unicode != 0)) connection?.finishComposingText()
+        val handled=session.keyboard.handle(event.action,event.keyCode,event.deviceId,unicode,event.metaState,event.repeatCount,event.characters)
+        if (handled && event.action == KeyEvent.ACTION_DOWN && event.keyCode != KeyEvent.KEYCODE_MOVE_HOME) session.toolbar=false
+        return handled
     }
+    override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean {
+        // Physical terminal shortcuts must not be rewritten by the local IME. Back and volume pass through.
+        if (event.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD && event.flags and KeyEvent.FLAG_SOFT_KEYBOARD == 0 &&
+            event.isFromSource(InputDevice.SOURCE_KEYBOARD) && handleKey(event)) return true
+        return super.dispatchKeyEventPreIme(event)
+    }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = handleKey(event) || super.dispatchKeyEvent(event)
+
 }
 
 internal fun virtualKey(code: Int): Int? = when(code) {

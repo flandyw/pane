@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package app.pane.rdp
 
@@ -6,7 +6,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
@@ -45,6 +44,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -81,6 +81,15 @@ private val OnBar = Color(0xFFEFEDF7)
 class MainActivity : ComponentActivity() {
     private val session: RdpSession by viewModels()
     override fun onStart() { super.onStart(); Updater.foreground = true; Updater.check(this) }
+    override fun onResume() {
+        super.onResume()
+        session.view?.post { session.view?.restartInput() }
+    }
+    override fun onPause() {
+        session.view?.releaseInput()
+        session.keyboard.releaseAll()
+        super.onPause()
+    }
     override fun onStop() {
         super.onStop()
         Updater.foreground = false
@@ -136,7 +145,7 @@ private fun openLink(context: Context, intent: Intent) {
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     val passwordFocus = remember { FocusRequester() }
-    val hardKeyboard = LocalConfiguration.current.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+    val hardKeyboard = hasHardwareKeyboard(LocalConfiguration.current.keyboard,LocalConfiguration.current.hardKeyboardHidden)
     LaunchedEffect(hardKeyboard) {
         if (hardKeyboard && session.profile.error() == null) passwordFocus.requestFocus()
     }
@@ -276,12 +285,12 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
     var clipboard by remember { mutableStateOf(false) }
     var help by remember { mutableStateOf(false) }
     var confirmExit by remember { mutableStateOf(false) }
-    var ctrl by remember { mutableStateOf(false) }
-    var alt by remember { mutableStateOf(false) }
+    val keyboard = session.keyboard
+    val imeVisible = WindowInsets.isImeVisible
     var redraws by remember { mutableIntStateOf(0) }
     val ready = session.phase == Phase.CONNECTED
     // The OnePlus keyboard cover and Bluetooth keyboards both report as a hard keyboard.
-    val hardKeyboard = LocalConfiguration.current.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+    val hardKeyboard = hasHardwareKeyboard(LocalConfiguration.current.keyboard,LocalConfiguration.current.hardKeyboardHidden)
     LaunchedEffect(help, ready) {
         if (help && ready) {
             session.paints.set(0)
@@ -295,11 +304,14 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
         accessibility.addTouchExplorationStateChangeListener(listener)
         onDispose { accessibility.removeTouchExplorationStateChangeListener(listener) }
     }
-    LaunchedEffect(ready, touchExploration) { if (ready && !touchExploration) { delay(6000); session.toolbar=false } }
+    SideEffect { session.inputSuspended = clipboard || help || confirmExit }
+    LaunchedEffect(ready, touchExploration, clipboard, help, confirmExit) {
+        if (ready && !touchExploration && !clipboard && !help && !confirmExit) { delay(6000); session.toolbar=false }
+    }
     LaunchedEffect(clipboard, help, confirmExit) {
         if (clipboard || help || confirmExit) {
             session.view?.releaseInput()
-            session.key(0xa2,false); session.key(0xa4,false); ctrl=false; alt=false
+            keyboard.releaseAll()
         }
     }
     LaunchedEffect(session.toolbar) { if (!session.toolbar) session.view?.requestFocus() }
@@ -314,15 +326,16 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             activity.volumeControlStream = AudioManager.USE_DEFAULT_STREAM_TYPE
             insets.show(WindowInsetsCompat.Type.systemBars())
-            session.key(0xa2,false); session.key(0xa4,false)
+            session.inputSuspended=false
+            keyboard.releaseAll()
         }
     }
-    LaunchedEffect(hardKeyboard, ready) {
-        session.key(0xa2,false); session.key(0xa4,false)
-        ctrl = false; alt = false
-    }
-    BackHandler(enabled = !clipboard && !help && !confirmExit) { if (session.toolbar) confirmExit=true else session.toolbar=true }
-    Column(Modifier.fillMaxSize().background(Desk).windowInsetsPadding(WindowInsets.displayCutout).imePadding()) {
+    LaunchedEffect(hardKeyboard, ready, imeVisible) { keyboard.releaseAll() }
+    BackHandler(enabled = !imeVisible && !clipboard && !help && !confirmExit) { if (session.toolbar) confirmExit=true else session.toolbar=true }
+    Column(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+        val key=event.nativeKeyEvent
+        ready && !clipboard && !help && !confirmExit && keyboard.toolbarShortcut(key.action,key.keyCode,key.deviceId,key.metaState,key.repeatCount)
+    }.background(Desk).windowInsetsPadding(WindowInsets.displayCutout).imePadding()) {
         // The desktop owns the whole screen; controls float over it and hide while you work.
         Box(Modifier.weight(1f).fillMaxWidth()) {
             AndroidView(factory={DesktopView(it,session)},modifier=Modifier.fillMaxSize())
@@ -345,7 +358,9 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
                         }
                         VerticalDivider(Modifier.height(28.dp).padding(horizontal=4.dp),color=OnBar.copy(alpha=0.15f))
                         TextButton(enabled=ready,onClick={session.view?.releaseInput();session.toggleTrackpad()}) { Text(if(session.trackpad) "Touch: trackpad" else "Touch: direct",color=if(ready) Lime else OnBar.copy(alpha=0.38f)) }
-                        if (!hardKeyboard) TextButton(enabled=ready,onClick={session.toolbar=false;session.view?.keyboard()}) { Text("Keyboard",color=if(ready) OnBar else OnBar.copy(alpha=0.38f)) }
+                        TextButton(enabled=ready,onClick={
+                            if (imeVisible) session.view?.hideKeyboard() else { session.toolbar=false;session.view?.keyboard() }
+                        }) { Text(if (imeVisible) "Hide keyboard" else "Keyboard",color=if(ready) OnBar else OnBar.copy(alpha=0.38f)) }
                         TextButton(enabled=ready,onClick={clipboard=true}) { Text("Clipboard",color=if(ready) OnBar else OnBar.copy(alpha=0.38f)) }
                         TextButton(enabled=ready,onClick={session.view?.resetZoom()}) { Text("Fit",color=if(ready) OnBar else OnBar.copy(alpha=0.38f)) }
                         IconButton(onClick={help=true}) { Icon(Icons.Default.Info,"Controls and session info") }
@@ -359,13 +374,13 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
                 Surface(shape=RoundedCornerShape(50),color=OnBar.copy(alpha=0.45f)) { Box(Modifier.size(56.dp,5.dp)) }
             }
         }
-        // On-screen modifiers only matter without a physical keyboard.
-        if (!hardKeyboard && ready) Surface(color=Bar,contentColor=OnBar) {
+        // Keep modifiers available whenever the user chooses the on-screen keyboard.
+        if (ready && (!hardKeyboard || imeVisible)) Surface(color=Bar,contentColor=OnBar) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically) {
-                FilterChip(selected=ctrl,onClick={ctrl=!ctrl;session.key(0xa2,ctrl);session.view?.requestFocus()},label={Text("Ctrl")},modifier=Modifier.heightIn(min=48.dp),enabled=ready)
-                FilterChip(selected=alt,onClick={alt=!alt;session.key(0xa4,alt);session.view?.requestFocus()},label={Text("Alt")},modifier=Modifier.heightIn(min=48.dp),enabled=ready)
+                FilterChip(selected=keyboard.ctrl,onClick={keyboard.toggleCtrl();session.view?.requestFocus()},label={Text("Ctrl")},modifier=Modifier.heightIn(min=48.dp),enabled=ready)
+                FilterChip(selected=keyboard.alt,onClick={keyboard.toggleAlt();session.view?.requestFocus()},label={Text("Alt")},modifier=Modifier.heightIn(min=48.dp),enabled=ready)
                 RemoteShortcuts.forEach { (label,vk) ->
-                    FilledTonalButton(enabled=ready,onClick={session.key(vk,true);session.key(vk,false);session.view?.requestFocus()},contentPadding=PaddingValues(horizontal=16.dp),modifier=Modifier.heightIn(min=48.dp).semantics { contentDescription = when (vk) { 0x26 -> "Arrow up"; 0x28 -> "Arrow down"; 0x25 -> "Arrow left"; 0x27 -> "Arrow right"; 0x21 -> "Page up"; 0x22 -> "Page down"; 0x1b -> "Escape"; else -> label } }) {Text(label)}
+                    FilledTonalButton(enabled=ready,onClick={keyboard.tap(vk);session.view?.requestFocus()},contentPadding=PaddingValues(horizontal=16.dp),modifier=Modifier.heightIn(min=48.dp).semantics { contentDescription = when (vk) { 0x26 -> "Arrow up"; 0x28 -> "Arrow down"; 0x25 -> "Arrow left"; 0x27 -> "Arrow right"; 0x21 -> "Page up"; 0x22 -> "Page down"; 0x1b -> "Escape"; else -> label } }) {Text(label)}
                 }
             }
         }
@@ -373,10 +388,11 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
     if(confirmExit) AlertDialog(onDismissRequest={confirmExit=false;session.view?.requestFocus()},title={Text("Leave your desktop?")},text={Text("Your apps keep running on the VPS. Reconnect when you’re ready.")},confirmButton={TextButton(onClick={confirmExit=false;session.disconnect()}){Text("Disconnect")}},dismissButton={TextButton(onClick={confirmExit=false;session.view?.requestFocus()}){Text("Stay")}})
     if(help) AlertDialog(onDismissRequest={help=false;session.view?.requestFocus()},title={Text("A little help")},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(16.dp)) {
         Text("Pane ${BuildConfig.VERSION_NAME} · ${if (session.profile.audio) "Sound on" else "Sound off"}",style=MaterialTheme.typography.bodySmall)
-        Text("Keyboard cover: every key goes to the desktop. Ctrl+Alt+Home shows or hides this toolbar. Android keeps a few system shortcuts, such as Meta combinations.")
-        Text("Trackpad: click or tap to click, two-finger click for right click, two fingers scroll in both directions.")
+        Text("Keyboard: typing follows your Android layout. Ctrl/Alt shortcuts go to the desktop. Ctrl+Alt+Home opens or hides this toolbar. Back, volume and Android system shortcuts stay local.")
+        Text("Trackpad: click or tap to click, right click and middle click are supported. Two fingers scroll in both directions; supported touchpad pinches zoom. Android keeps its system navigation gestures.")
         Text("Touchscreen: tap to click, hold to right click, double tap and hold to drag. Two fingers scroll; pinch to zoom. In trackpad mode the screen moves the pointer like a laptop.")
         Text("${session.size} · 24-bit · TLS\n$redraws redraws in the last second",style=MaterialTheme.typography.bodySmall)
+        Text("Keyboard requests the Android keyboard with or without a cover. Back hides it first. Uncommitted composition is local; clipboard transfer is best for large passages.",style=MaterialTheme.typography.bodySmall)
         Text("Redraws depend on screen activity; this is not a network latency measurement.",style=MaterialTheme.typography.bodySmall)
     }},confirmButton={TextButton(onClick={help=false;session.view?.requestFocus()}){Text("Got it")}})
     val clipboardDismiss = { clipboard=false; session.view?.requestFocus(); Unit }

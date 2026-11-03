@@ -26,16 +26,18 @@ superiority over other clients.
 The session is full screen. The toolbar hides a moment after connecting; tap the
 handle at the top, press Back, or press **Ctrl+Alt+Home** to bring it back. With
 the keyboard cover attached, the password field is focused when server details are valid (type it and
-press Enter), every key goes to the desktop, and the on-screen shortcut bar is
-hidden. Android keeps a few system shortcuts, such as Meta combinations. The
+press Enter), ordinary typing follows Android’s keyboard layout and app-owned shortcuts go to
+the desktop. The shortcut bar is hidden unless you open the software keyboard.
+Android keeps Back, volume and its reserved system shortcuts. The
 cover's trackpad drives the remote cursor directly (Android's own arrow is
 hidden): click or tap to click, two-finger click to right click, two fingers
-scroll vertically and horizontally.
+scroll vertically and horizontally; supported touchpad pinches zoom. Android
+keeps its system navigation gestures.
 
 On the touchscreen, trackpad mode is the default. Tap to click, hold to right
 click, double tap and hold to drag. Two fingers scroll; pinch to zoom. When
 zoomed, the viewport follows the pointer. Switch to direct touch in the toolbar.
-The keyboard button (shown without a physical keyboard) opens the Android
+The keyboard button requests the Android keyboard with or without a physical
 keyboard; Ctrl and Alt in the shortcut bar toggle until tapped again. Clipboard
 transfer is explicit in the toolbar. Disconnect leaves your applications running
 on the VPS.
@@ -48,6 +50,9 @@ screens and stays visible when touch exploration is enabled.
 
 See [the polish ledger](docs/POLISHES.md) for the UI, input and rendering changes
 and remaining device checks.
+The [Android input compatibility notes](docs/ANDROID-INPUT.md) link the platform
+research, describe keyboard/IME/trackpad routing, and list hardware checks and
+remaining remote-text limitations.
 
 ## Rendering and security
 

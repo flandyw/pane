@@ -6,6 +6,7 @@ import android.graphics.Point
 import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
+import android.view.KeyCharacterMap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -32,6 +33,8 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
     var remoteClipboard by mutableStateOf(""); private set
     var trackpad by mutableStateOf(prefs.getBoolean("trackpad", true))
     var toolbar by mutableStateOf(true)
+    var inputSuspended = false
+    internal val keyboard = RemoteKeyboard(::key,::text,{ toolbar = !toolbar },KeyCharacterMap::getDeadChar)
     /** Long/short ratio of the physical screen, so the remote desktop fills it in either orientation. */
     val aspect: Float = Point().also {
         @Suppress("DEPRECATION") app.getSystemService(WindowManager::class.java).defaultDisplay.getRealSize(it)
@@ -117,6 +120,8 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
     }
     fun disconnect() {
         if (phase == Phase.IDLE || phase == Phase.DISCONNECTING) return
+        view?.releaseInput()
+        keyboard.releaseAll()
         phase = Phase.DISCONNECTING
         requestedStop = true
         // Abort outside the connection executor: native connection setup may still be running.
@@ -138,7 +143,7 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
                 ownsListener = false
             }
             synchronized(frameLock) { bitmap = null; cursor = null }
-            main.post { remoteClipboard = ""; message = detail; phase = Phase.IDLE; if (cleared) worker.shutdown() }
+            main.post { view?.releaseInput(); keyboard.releaseAll(); remoteClipboard = ""; message = detail; phase = Phase.IDLE; if (cleared) worker.shutdown() }
         }
     }
     override fun resized(width: Int, height: Int) {
@@ -174,8 +179,12 @@ class RdpSession(app: Application) : AndroidViewModel(app), Rdp.Listener {
     override fun clipboard(text: String) { main.post { remoteClipboard = text.take(1_048_576) } }
     fun sendClipboard(text: String) = input { Rdp.freerdp_send_clipboard_data(it, text.take(1_048_576)) }
     fun mouse(x: Int, y: Int, flags: Int) = input { Rdp.freerdp_send_cursor_event(it,x,y,flags) }
-    fun key(vk: Int, down: Boolean) = input { Rdp.freerdp_send_key_event(it,vk,down) }
-    fun text(text: String) = input { i -> text.take(16384).forEach { Rdp.freerdp_send_unicodekey_event(i,it.code,true); Rdp.freerdp_send_unicodekey_event(i,it.code,false) } }
+    private fun key(vk: Int, down: Boolean) = input { Rdp.freerdp_send_key_event(it,vk,down) }
+    private fun text(text: String) = input { i ->
+        sendRemoteText(text,
+            { vk,down -> Rdp.freerdp_send_key_event(i,vk,down); Unit },
+            { code,down -> Rdp.freerdp_send_unicodekey_event(i,code,down); Unit })
+    }
     private inline fun input(action: (Long) -> Unit) {
         synchronized(nativeLock) { if (instance != 0L && phase == Phase.CONNECTED) action(instance) }
     }
