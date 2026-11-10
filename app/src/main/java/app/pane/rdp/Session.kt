@@ -15,9 +15,13 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONObject
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 /**
  * One horizontal band of the desktop with its own H.264 stream (port of web/src/worker.ts),
@@ -134,6 +138,8 @@ class Session(val host: Host, private val password: String, private val listener
     private var lastKeyRequest = 0L
     private var keyRetryPosted = false
     private var stopped = true
+    private var everConnected = false // main thread
+    private var retries = 0 // main thread
     fun sendClipboard(text: String) { send("c,${text.take(1_048_576)}") }
 
     fun start() {
@@ -170,7 +176,14 @@ class Session(val host: Host, private val password: String, private val listener
         stripes.forEach { it.reset() }
         if (!retry || stopped) return
         listener.onState("Reconnecting…")
-        main.postDelayed({ if (!stopped) start() }, 1000)
+        main.postDelayed({ if (!stopped) start() }, retryDelayMs(retries++))
+    }
+
+    /** Main thread. A first connection that fails is reported; an established one reconnects. */
+    private fun failed(reason: String) {
+        if (everConnected) { dropped(retry = true); return }
+        stop()
+        listener.onState(reason)
     }
 
     private inner class Socket : WebSocketListener() {
@@ -193,7 +206,7 @@ class Session(val host: Host, private val password: String, private val listener
         override fun onClosing(w: WebSocket, code: Int, reason: String) { w.close(1000, null) }
 
         override fun onClosed(w: WebSocket, code: Int, reason: String) {
-            main.post { if (mine(w)) dropped(retry = true) }
+            main.post { if (mine(w)) failed(connectionFailure(null, null)) }
         }
 
         override fun onFailure(w: WebSocket, t: Throwable, r: Response?) {
@@ -205,7 +218,7 @@ class Session(val host: Host, private val password: String, private val listener
                     listener.onState("Wrong password")
                     listener.onAuthFailed()
                 } else {
-                    dropped(retry = true)
+                    failed(connectionFailure(t, code))
                 }
             }
         }
@@ -230,6 +243,7 @@ class Session(val host: Host, private val password: String, private val listener
                 main.post {
                     old.forEach { it.setSurface(null) }
                     if (sock !== ws) return@post
+                    everConnected = true; retries = 0
                     listener.onState(null)
                     listener.onHello(w, h, next, scale, displays, display)
                 }
@@ -329,4 +343,17 @@ internal fun parseCursor(d: ByteArray): CursorImage? {
         u8(o + 3) shl 24 or (u8(o) shl 16) or (u8(o + 1) shl 8) or u8(o + 2)
     } else null
     return CursorImage(w, h, u16(6), u16(8), px)
+}
+
+/** Reconnect delay for an established session: 1s doubling to a 30s cap. */
+internal fun retryDelayMs(attempt: Int): Long = (1000L shl attempt.coerceIn(0, 5)).coerceAtMost(30_000)
+
+/** Why a first connection failed, in words the connect screen can show. */
+internal fun connectionFailure(t: Throwable?, code: Int?): String = when {
+    code != null -> "The server answered HTTP $code instead of Voxl. Check the address and path."
+    t is UnknownHostException -> "Couldn't find that server. Check the address."
+    t is SSLException -> "Couldn't make a secure connection. Check the server's certificate."
+    t is ConnectException -> "The server refused the connection. Check the address and port."
+    t is SocketTimeoutException -> "The server didn't respond. Check the address and your network."
+    else -> "Couldn't reach the Voxl server. Check the address and try again."
 }
