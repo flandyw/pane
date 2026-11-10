@@ -130,7 +130,7 @@ class Session(val host: Host, private val password: String, private val listener
     @Volatile private var ws: WebSocket? = null
     @Volatile var connected = false; private set
     @Volatile private var stripes: List<Stripe> = emptyList()
-    private val pending = ConcurrentHashMap<Int, Int>() // frame id -> parts still to arrive
+    private val acks = FrameAcks()
     private var lastKeyRequest = 0L
     private var keyRetryPosted = false
     private var stopped = true
@@ -166,7 +166,7 @@ class Session(val host: Host, private val password: String, private val listener
     private fun dropped(retry: Boolean) {
         ws = null
         connected = false
-        pending.clear()
+        acks.clear()
         stripes.forEach { it.reset() }
         if (!retry || stopped) return
         listener.onState("Reconnecting…")
@@ -223,7 +223,7 @@ class Session(val host: Host, private val password: String, private val listener
                 val next = hello.bands.map { (y, height) -> Stripe(y, height, w) }
                 val old = stripes
                 stripes = next
-                pending.clear()
+                acks.clear()
                 val scale = j.optJSONObject("resize")?.optDouble("scale")?.takeIf { it.isFinite() && it > 0 }
                 val displays = j.optInt("displays", 1).coerceIn(1, 32)
                 val display = j.optInt("display", 0).coerceIn(0, displays - 1)
@@ -249,38 +249,18 @@ class Session(val host: Host, private val password: String, private val listener
     }
 
     private fun binary(sock: WebSocket, d: ByteArray) {
-        if (d.isEmpty()) return
-        val u8 = { i: Int -> d[i].toInt() and 0xff }
-        when (d[0].toInt()) {
-            0x01 -> {
-                if (d.size < 16) return
-                val key = u8(1) and 1 == 1
-                val frame = u8(2) shl 24 or (u8(3) shl 16) or (u8(4) shl 8) or u8(5)
-                val idx = u8(10); val parts = maxOf(u8(12), 1)
-                stripes.getOrNull(idx)?.let { st ->
-                    if (key) st.waitingKey = false
-                    if (!st.waitingKey && !st.decode(d.copyOfRange(16, d.size), key)) st.waitingKey = true
-                    if (st.waitingKey) requestKeyframe()
-                }
-                // A frame is acked once every stripe part arrived, decoded or not (same as the web worker).
-                if (pending.size > 256) pending.clear()
-                val left = (pending[frame] ?: parts) - 1
-                if (left <= 0) { pending.remove(frame); send("a,${frame.toUInt()}") } else pending[frame] = left
+        parseFrameHeader(d)?.let { h ->
+            stripes.getOrNull(h.stripe)?.let { st ->
+                if (h.key) st.waitingKey = false
+                if (!st.waitingKey && !st.decode(d.copyOfRange(16, d.size), h.key)) st.waitingKey = true
+                if (st.waitingKey) requestKeyframe()
             }
-            0x03 -> {
-                if (d.size < 14) return
-                val u16 = { o: Int -> u8(o) shl 8 or u8(o + 1) }
-                val w = u16(2); val h = u16(4); val hx = u16(6); val hy = u16(8)
-                val bmp = if (w in 1..512 && h in 1..512 && d.size >= 14 + w * h * 4) {
-                    // RGBA, not premultiplied; createBitmap premultiplies ARGB ints.
-                    val px = IntArray(w * h) { i ->
-                        val o = 14 + i * 4
-                        u8(o + 3) shl 24 or (u8(o) shl 16) or (u8(o + 1) shl 8) or u8(o + 2)
-                    }
-                    Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
-                } else null
-                post(sock) { listener.onCursor(bmp, hx, hy) }
-            }
+            if (acks.part(h.frame, h.parts)) send("a,${h.frame.toUInt()}")
+            return
+        }
+        parseCursor(d)?.let { c ->
+            val bmp = c.argb?.let { Bitmap.createBitmap(it, c.width, c.height, Bitmap.Config.ARGB_8888) }
+            post(sock) { listener.onCursor(bmp, c.hotX, c.hotY) }
         }
     }
 
@@ -310,4 +290,43 @@ class Session(val host: Host, private val password: String, private val listener
             .readTimeout(0, TimeUnit.MILLISECONDS) // the host pings; a quiet desktop is not a dead one
             .build()
     }
+}
+
+/** Header of a 0x01 video message; null when it is not one or is truncated. */
+internal data class FrameHeader(val key: Boolean, val frame: Int, val stripe: Int, val parts: Int)
+
+internal fun parseFrameHeader(d: ByteArray): FrameHeader? {
+    if (d.size < 16 || d[0].toInt() != 0x01) return null
+    val u8 = { i: Int -> d[i].toInt() and 0xff }
+    return FrameHeader(u8(1) and 1 == 1, u8(2) shl 24 or (u8(3) shl 16) or (u8(4) shl 8) or u8(5), u8(10), maxOf(u8(12), 1))
+}
+
+/** A frame is acked once every stripe part arrived, decoded or not (same as the web worker). Any thread. */
+internal class FrameAcks {
+    private val pending = ConcurrentHashMap<Int, Int>() // frame id -> parts still to arrive
+    /** Records one part; true when [frame] is complete and should be acked. */
+    fun part(frame: Int, parts: Int): Boolean {
+        if (pending.size > 256) pending.clear()
+        val left = (pending[frame] ?: parts) - 1
+        if (left <= 0) { pending.remove(frame); return true }
+        pending[frame] = left
+        return false
+    }
+    fun clear() = pending.clear()
+}
+
+internal class CursorImage(val width: Int, val height: Int, val hotX: Int, val hotY: Int, val argb: IntArray?)
+
+/** Parses a 0x03 cursor message; argb is null (hidden cursor) when the image is absent or out of bounds. */
+internal fun parseCursor(d: ByteArray): CursorImage? {
+    if (d.size < 14 || d[0].toInt() != 0x03) return null
+    val u8 = { i: Int -> d[i].toInt() and 0xff }
+    val u16 = { o: Int -> u8(o) shl 8 or u8(o + 1) }
+    val w = u16(2); val h = u16(4)
+    // RGBA, not premultiplied; createBitmap premultiplies ARGB ints.
+    val px = if (w in 1..512 && h in 1..512 && d.size >= 14 + w * h * 4) IntArray(w * h) { i ->
+        val o = 14 + i * 4
+        u8(o + 3) shl 24 or (u8(o) shl 16) or (u8(o + 1) shl 8) or u8(o + 2)
+    } else null
+    return CursorImage(w, h, u16(6), u16(8), px)
 }
