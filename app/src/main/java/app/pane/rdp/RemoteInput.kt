@@ -218,3 +218,10 @@ private val ModifierGroups = listOf(
     intArrayOf(KeyEvent.KEYCODE_ALT_LEFT,KeyEvent.KEYCODE_ALT_RIGHT,KeyEvent.META_ALT_LEFT_ON,KeyEvent.META_ALT_RIGHT_ON,KeyEvent.META_ALT_ON,0xa4,0xa5),
     intArrayOf(KeyEvent.KEYCODE_META_LEFT,KeyEvent.KEYCODE_META_RIGHT,KeyEvent.META_META_LEFT_ON,KeyEvent.META_META_RIGHT_ON,KeyEvent.META_META_ON,0x5b,0x5c)
 )
+
+/** Convert touchpad counts/mm to display pixels/mm before running Pane's existing gestures. */
+internal fun touchpadCoordinateScale(resolution: Float, dpi: Float): Float {
+    // shortcut: devices without axis resolution retain their native units; calibrate on affected hardware.
+    if (!resolution.isFinite() || resolution <= 0 || !dpi.isFinite() || dpi <= 0) return 1f
+    return (dpi / 25.4f / resolution).coerceIn(0.01f, 100f)
+}

@@ -1,9 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-    <application android:label="Pane" android:theme="@style/Theme.Pane" android:icon="@drawable/ic_pane" android:allowBackup="false" android:dataExtractionRules="@xml/backup_rules" android:supportsRtl="true" android:usesCleartextTraffic="false" android:hardwareAccelerated="true">
+    <application android:label="Pane" android:theme="@style/Theme.Pane" android:icon="@drawable/ic_pane" android:allowBackup="false" android:dataExtractionRules="@xml/backup_rules" android:supportsRtl="true" android:usesCleartextTraffic="true" android:hardwareAccelerated="true">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

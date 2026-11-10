@@ -79,13 +79,45 @@ private val Bar = Color(0xFF252631)
 private val OnBar = Color(0xFFEFEDF7)
 
 class MainActivity : ComponentActivity() {
-    private val session: RdpSession by viewModels()
+    private val session: VoxlSession by viewModels()
     override fun onStart() { super.onStart(); Updater.foreground = true; Updater.check(this) }
+    var desktopPinned by mutableStateOf(false); private set
+    private var requestedPin = false
+    fun pinDesktop() {
+        try { startLockTask(); requestedPin = true }
+        catch (_: IllegalStateException) { Toast.makeText(this, "Android couldn't pin this desktop.", Toast.LENGTH_LONG).show() }
+    }
+    fun unpinDesktop() {
+        if (requestedPin || desktopPinned) {
+            try { stopLockTask() } catch (_: IllegalStateException) { }
+            catch (_: SecurityException) { Toast.makeText(this, "Use Android's unpin gesture to leave screen pinning.", Toast.LENGTH_LONG).show() }
+            requestedPin = false
+        }
+        desktopPinned = getSystemService(android.app.ActivityManager::class.java).lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE
+    }
+    internal fun hideSystemBars() {
+        if (session.phase != Phase.IDLE) WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemBars()
+            desktopPinned = getSystemService(android.app.ActivityManager::class.java).lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE
+        }
+        session.focus.foreground(hasFocus && !isFinishing)
+    }
     override fun onResume() {
         super.onResume()
+        desktopPinned = getSystemService(android.app.ActivityManager::class.java).lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE
+        session.focus.foreground(true)
+        hideSystemBars()
         session.view?.post { session.view?.restartInput() }
     }
     override fun onPause() {
+        session.focus.foreground(false)
         session.view?.releaseInput()
         session.keyboard.releaseAll()
         super.onPause()
@@ -121,7 +153,10 @@ class MainActivity : ComponentActivity() {
                 surface = Paper, onSurface = Ink, surfaceContainer = Color(0xFFEDEBF5)
             )) {
                 Surface(Modifier.fillMaxSize()) {
-                    if (session.phase == Phase.IDLE) Home(session) else MaterialTheme(colorScheme = darkColorScheme(
+                    if (session.phase == Phase.IDLE) Box(Modifier.fillMaxSize()) {
+                        Home(session)
+                        UpdateConfetti(Modifier.matchParentSize())
+                    } else MaterialTheme(colorScheme = darkColorScheme(
                         primary = Color(0xFFC5BFFF), secondaryContainer = Color(0xFF394922), onSecondaryContainer = Lime,
                         surface = Desk, onSurface = OnBar, surfaceContainer = Bar
                     )) { Remote(session) }
@@ -137,11 +172,11 @@ private fun openLink(context: Context, intent: Intent) {
     }
 }
 
-@Composable private fun Home(session: RdpSession) {
-    var password by remember(session.profile.host, session.profile.username, session.profile.normalizedPin()) {
+@Composable private fun Home(session: VoxlSession) {
+    var password by remember(session.profile.host) {
         mutableStateOf(session.savedPassword())
     }
-    var advanced by rememberSaveable { mutableStateOf(session.profile.fingerprintError() != null) }
+    var advanced by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     val passwordFocus = remember { FocusRequester() }
@@ -164,24 +199,18 @@ private fun openLink(context: Context, intent: Intent) {
                 Text("Pane",Modifier.weight(1f).padding(start = 12.dp),style = MaterialTheme.typography.titleLarge,fontWeight = FontWeight.Bold)
                 TextButton(onClick = { openLink(context,Intent(Intent.ACTION_VIEW,Uri.parse("https://pane.flandolf.me/releases/"))) }) { Text("Builds ↗") }
             }
-            if (Updater.status.isNotEmpty()) Text(Updater.status,Modifier.padding(bottom = 8.dp).semantics { liveRegion = LiveRegionMode.Polite },style = MaterialTheme.typography.bodySmall)
-            Updater.ready?.let { version ->
-                FilledTonalButton(onClick = {
-                    if (!context.packageManager.canRequestPackageInstalls())
-                        openLink(context,Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${context.packageName}")))
-                    else Updater.install(context,background = false)
-                },modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) { Text("Update to $version") }
-            }
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                 if (maxWidth >= 840.dp && LocalDensity.current.fontScale <= 1.3f) Row(Modifier.fillMaxSize(),horizontalArrangement = Arrangement.spacedBy(32.dp),verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(0.9f).verticalScroll(rememberScrollState())) { Introduction(false) }
                     Column(Modifier.weight(1.1f).verticalScroll(rememberScrollState()).padding(vertical = 12.dp)) {
+                        UpdateCard(Modifier.padding(bottom = 12.dp))
                         ConnectCard(session,password,{password=it},passwordFocus,advanced,{advanced=!advanced},connect)
                     }
                 } else Column(Modifier.widthIn(max = 640.dp).fillMaxSize().verticalScroll(rememberScrollState()).align(Alignment.TopCenter),verticalArrangement = Arrangement.spacedBy(20.dp)) {
                     Introduction(true)
+                    UpdateCard()
                     ConnectCard(session,password,{password=it},passwordFocus,advanced,{advanced=!advanced},connect)
-                    Text("PRIVATE CONNECTION · NATIVE RDP",Modifier.padding(bottom = 20.dp),style = MaterialTheme.typography.labelSmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("PRIVATE CONNECTION · VOXL",Modifier.padding(bottom = 20.dp),style = MaterialTheme.typography.labelSmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -193,7 +222,7 @@ private fun openLink(context: Context, intent: Intent) {
     Spacer(Modifier.height(if (compact) 8.dp else 24.dp))
     Text("A little closer to your desktop.",Modifier.semantics { heading() },style = if (compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displayMedium,fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(12.dp))
-    Text("Connect Tailscale, then open your Linux workspace.",style = MaterialTheme.typography.bodyLarge,color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("Connect to your Voxl server, then open your workspace.",style = MaterialTheme.typography.bodyLarge,color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (!compact) {
         Spacer(Modifier.height(28.dp))
         Surface(shape = RoundedCornerShape(28.dp),color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -216,22 +245,17 @@ private fun openLink(context: Context, intent: Intent) {
     }
 }
 
-@Composable private fun ConnectCard(session: RdpSession,password: String,onPassword: (String)->Unit,passwordFocus: FocusRequester,advanced: Boolean,onAdvanced: ()->Unit,connect: ()->Unit) {
-    var showPassword by remember(session.profile.host, session.profile.username) { mutableStateOf(false) }
+@Composable private fun ConnectCard(session: VoxlSession,password: String,onPassword: (String)->Unit,passwordFocus: FocusRequester,advanced: Boolean,onAdvanced: ()->Unit,connect: ()->Unit) {
+    var showPassword by remember(session.profile.host) { mutableStateOf(false) }
     var hostTouched by remember { mutableStateOf(false) }
-    var userTouched by remember { mutableStateOf(false) }
-    var pinTouched by remember { mutableStateOf(false) }
     val profile = session.profile
     val hostError = profile.hostError().takeIf { hostTouched }
-    val userError = profile.usernameError().takeIf { userTouched }
-    val pinError = profile.fingerprintError().takeIf { pinTouched }
     val valid = profile.error() == null
     Surface(shape = RoundedCornerShape(28.dp),color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.padding(20.dp),verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Your workspace",Modifier.semantics { heading() },style = MaterialTheme.typography.headlineSmall,fontWeight = FontWeight.SemiBold)
-            Text(if (profile.host.isBlank()) "Add your server to get started" else "${profile.username.ifBlank { "Your account" }} @ ${profile.host}",style = MaterialTheme.typography.bodyMedium,color = MaterialTheme.colorScheme.onSurfaceVariant,maxLines = 2,overflow = TextOverflow.Ellipsis)
-            OutlinedTextField(value = profile.host,onValueChange = {hostTouched=true; session.profile=profile.copy(host=it.trim())},label = {Text("Tailscale address")},placeholder = {Text("100.64.0.1 or server.ts.net")},supportingText = {Text(hostError ?: "Keep Tailscale connected on this tablet.")},isError = hostError != null,singleLine = true,modifier = Modifier.fillMaxWidth(),shape = RoundedCornerShape(16.dp),keyboardOptions = KeyboardOptions(autoCorrectEnabled = false,keyboardType = KeyboardType.Uri,imeAction = ImeAction.Next))
-            OutlinedTextField(value = profile.username,onValueChange = {userTouched=true; session.profile=profile.copy(username=it)},label = {Text("Linux username")},supportingText = userError?.let { { Text(it) } },isError = userError != null,singleLine = true,modifier = Modifier.fillMaxWidth(),shape = RoundedCornerShape(16.dp),keyboardOptions = KeyboardOptions(autoCorrectEnabled = false,imeAction = ImeAction.Next))
+            Text(if (profile.host.isBlank()) "Add your server to get started" else "${profile.host}",style = MaterialTheme.typography.bodyMedium,color = MaterialTheme.colorScheme.onSurfaceVariant,maxLines = 2,overflow = TextOverflow.Ellipsis)
+            OutlinedTextField(value = profile.host,onValueChange = {hostTouched=true; session.profile=profile.copy(host=it.trim())},label = {Text("Voxl server address")},placeholder = {Text("wss://server.ts.net:6901/ws")},supportingText = {Text(hostError ?: "Voxl password authentication · H.264 video")},isError = hostError != null,singleLine = true,modifier = Modifier.fillMaxWidth(),shape = RoundedCornerShape(16.dp),keyboardOptions = KeyboardOptions(autoCorrectEnabled = false,keyboardType = KeyboardType.Uri,imeAction = ImeAction.Next))
             OutlinedTextField(value = password,onValueChange = onPassword,label = {Text("Password")},singleLine = true,modifier = Modifier.fillMaxWidth().focusRequester(passwordFocus),shape = RoundedCornerShape(16.dp),visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),trailingIcon = { TextButton(onClick = {showPassword=!showPassword},modifier = Modifier.semantics { contentDescription = if (showPassword) "Hide password" else "Show password" }) { Text(if (showPassword) "Hide" else "Show") } },keyboardOptions = KeyboardOptions(autoCorrectEnabled = false,keyboardType = KeyboardType.Password,imeAction = ImeAction.Go),keyboardActions = KeyboardActions(onGo={if (valid && password.isNotEmpty()) connect()}))
             SettingRow("Remember password","Encrypted on this tablet. Turn off to delete it.",session.rememberPassword,session::updateRememberPassword)
             Text("Desktop quality",Modifier.semantics { heading() },style = MaterialTheme.typography.titleMedium)
@@ -254,17 +278,13 @@ private fun openLink(context: Context, intent: Intent) {
                 }
             }
             Text("${session.size} pixels · ${profile.quality.detail}",Modifier.semantics { liveRegion = LiveRegionMode.Polite },style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
-            SettingRow("Desktop sound","Plays on this tablet. Off reduces server work.",profile.audio) { session.profile=profile.copy(audio=it) }
             TextButton(onClick = onAdvanced,modifier = Modifier.fillMaxWidth().semantics { stateDescription = if (advanced) "Expanded" else "Collapsed" }) { Text(if(advanced) "Hide server verification" else "Server verification") }
             if (advanced) {
                 HorizontalDivider()
                 Text("Verified server",Modifier.semantics { heading() },style = MaterialTheme.typography.titleMedium)
-                Text("Get the SHA-256 fingerprint from a trusted server terminal. A changed certificate blocks the connection.",style = MaterialTheme.typography.bodySmall)
-                SelectionContainer { Text("openssl x509 -in /etc/xrdp/cert.pem -noout -fingerprint -sha256",style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)) }
-                OutlinedTextField(value = profile.fingerprint,onValueChange = {pinTouched=true;session.profile=profile.copy(fingerprint=it)},label = {Text("SHA-256 fingerprint")},isError = pinError != null,supportingText = { Text(pinError ?: "${profile.normalizedPin().length} / 64 digits · colons and whitespace accepted") },textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),minLines = 2,maxLines = 4,keyboardOptions = KeyboardOptions(autoCorrectEnabled = false,keyboardType = KeyboardType.Ascii),modifier = Modifier.fillMaxWidth(),shape = RoundedCornerShape(16.dp))
-                Text("Port 3389 · TLS · 24-bit colour · Video codecs off",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("WSS verifies the server's certificate and hostname using Android's trusted authorities. WS is unencrypted: use it only over Tailscale or another trusted private network.",style = MaterialTheme.typography.bodySmall)
+                Text("Voxl · WebSocket · H.264 · Server resizing requires --enable-resize",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (!valid && !advanced && profile.fingerprintError() != null) Text("Open Server verification to add or fix the certificate fingerprint.",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.error)
             if (session.message.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.errorContainer,shape = RoundedCornerShape(16.dp)) {
                 SelectionContainer { Text(session.message,Modifier.padding(16.dp).semantics { liveRegion = LiveRegionMode.Polite },style = MaterialTheme.typography.bodyMedium,color = MaterialTheme.colorScheme.onErrorContainer) }
             }
@@ -272,19 +292,21 @@ private fun openLink(context: Context, intent: Intent) {
                 Text("Open desktop",style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.width(12.dp)); Icon(Icons.AutoMirrored.Filled.ArrowForward,contentDescription = null)
             }
-            Text(if (!valid) "Complete the server details to connect." else if (password.isEmpty()) "Enter your password to connect." else "Ready for a certificate-verified connection.",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (!valid) "Complete the server details to connect." else if (password.isEmpty()) "Enter your password to connect." else "Ready to connect to Voxl.",style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"↓" to 0x28,"←" to 0x25,"→" to 0x27,"Home" to 0x24,"End" to 0x23,"PgUp" to 0x21,"PgDn" to 0x22)
 
-@Composable private fun Remote(session: RdpSession) {
+@android.annotation.SuppressLint("WrongConstant") // The cutout value restored below came directly from Android.
+@Composable private fun Remote(session: VoxlSession) {
     val context = LocalContext.current
-    val activity = context as ComponentActivity
+    val activity = context as MainActivity
     var clipboard by remember { mutableStateOf(false) }
     var help by remember { mutableStateOf(false) }
     var confirmExit by remember { mutableStateOf(false) }
+    var pinPrompt by remember { mutableStateOf(false) }
     val keyboard = session.keyboard
     val imeVisible = WindowInsets.isImeVisible
     var redraws by remember { mutableIntStateOf(0) }
@@ -304,25 +326,37 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
         accessibility.addTouchExplorationStateChangeListener(listener)
         onDispose { accessibility.removeTouchExplorationStateChangeListener(listener) }
     }
-    SideEffect { session.inputSuspended = clipboard || help || confirmExit }
-    LaunchedEffect(ready, touchExploration, clipboard, help, confirmExit) {
-        if (ready && !touchExploration && !clipboard && !help && !confirmExit) { delay(6000); session.toolbar=false }
+    SideEffect { session.inputSuspended = clipboard || help || confirmExit || pinPrompt }
+    LaunchedEffect(ready, touchExploration, clipboard, help, confirmExit, pinPrompt) {
+        if (ready && !touchExploration && !clipboard && !help && !confirmExit && !pinPrompt) { delay(2000); session.toolbar=false }
     }
-    LaunchedEffect(clipboard, help, confirmExit) {
-        if (clipboard || help || confirmExit) {
+    LaunchedEffect(clipboard, help, confirmExit, pinPrompt) {
+        if (clipboard || help || confirmExit || pinPrompt) {
             session.view?.releaseInput()
             keyboard.releaseAll()
         }
     }
     LaunchedEffect(session.toolbar) { if (!session.toolbar) session.view?.requestFocus() }
     DisposableEffect(activity) {
+        val window = activity.window
+        val oldCutout = if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode else 0
+        val oldContrast = if (android.os.Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced else false
+        window.attributes = window.attributes.apply {
+            if (android.os.Build.VERSION.SDK_INT >= 28) layoutInDisplayCutoutMode =
+                if (android.os.Build.VERSION.SDK_INT >= 30) WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
         activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        // Volume keys adjust desktop sound even between clips, not the ringer.
+        // Local controls use media volume; focused desktop input forwards volume keys to the host.
         activity.volumeControlStream = AudioManager.STREAM_MUSIC
         val insets = WindowCompat.getInsetsController(activity.window,activity.window.decorView)
         insets.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         insets.hide(WindowInsetsCompat.Type.systemBars())
         onDispose {
+            activity.unpinDesktop()
+            window.attributes = window.attributes.apply { if (android.os.Build.VERSION.SDK_INT >= 28) layoutInDisplayCutoutMode = oldCutout }
+            if (android.os.Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = oldContrast
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             activity.volumeControlStream = AudioManager.USE_DEFAULT_STREAM_TYPE
             insets.show(WindowInsetsCompat.Type.systemBars())
@@ -331,24 +365,26 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
         }
     }
     LaunchedEffect(hardKeyboard, ready, imeVisible) { keyboard.releaseAll() }
-    BackHandler(enabled = !imeVisible && !clipboard && !help && !confirmExit) { if (session.toolbar) confirmExit=true else session.toolbar=true }
+    LaunchedEffect(ready, imeVisible) { if (ready && !imeVisible) activity.hideSystemBars() }
+    LaunchedEffect(hardKeyboard, ready) { if (hardKeyboard && ready) session.view?.hideKeyboard() }
+    BackHandler(enabled = !imeVisible && !clipboard && !help && !confirmExit && !pinPrompt) { if (session.toolbar) confirmExit=true else session.toolbar=true }
     Column(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
         val key=event.nativeKeyEvent
-        ready && !clipboard && !help && !confirmExit && keyboard.toolbarShortcut(key.action,key.keyCode,key.deviceId,key.metaState,key.repeatCount)
-    }.background(Desk).windowInsetsPadding(WindowInsets.displayCutout).imePadding()) {
+        ready && !clipboard && !help && !confirmExit && !pinPrompt && keyboard.toolbarShortcut(key.action,key.keyCode,key.deviceId,key.metaState,key.repeatCount)
+    }.background(Desk).imePadding()) {
         // The desktop owns the whole screen; controls float over it and hide while you work.
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            AndroidView(factory={DesktopView(it,session)},modifier=Modifier.fillMaxSize())
+            AndroidView(factory={DesktopView(it,session)},update={ it.setImmersed(ready && !touchExploration && !session.toolbar && !imeVisible && !clipboard && !help && !confirmExit && !pinPrompt) },modifier=Modifier.fillMaxSize())
             if (!ready) Surface(Modifier.align(Alignment.Center),shape=RoundedCornerShape(32.dp),color=MaterialTheme.colorScheme.primaryContainer) {
                 Column(Modifier.widthIn(max=400.dp).verticalScroll(rememberScrollState()).padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(16.dp)) {
                     LoadingIndicator()
                     Text(if(session.phase==Phase.DISCONNECTING) "Closing session…" else "Opening your desktop…",Modifier.semantics { liveRegion=LiveRegionMode.Polite },style=MaterialTheme.typography.titleMedium)
-                    Text("${session.profile.host}\n${session.size} · TLS",style=MaterialTheme.typography.bodySmall)
+                    Text("${session.profile.host}\n${session.size} · Voxl",style=MaterialTheme.typography.bodySmall)
                     Text("Keep Tailscale connected. Connection setup may take a few seconds.",style=MaterialTheme.typography.bodySmall)
                     TextButton(onClick={session.disconnect()},enabled=session.phase!=Phase.DISCONNECTING) {Text("Cancel")}
                 }
             }
-            androidx.compose.animation.AnimatedVisibility(session.toolbar,Modifier.align(Alignment.TopCenter).padding(horizontal=8.dp,vertical=12.dp),enter=slideInVertically{-it}+fadeIn(),exit=slideOutVertically{-it}+fadeOut()) {
+            androidx.compose.animation.AnimatedVisibility(session.toolbar,Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.displayCutout).padding(horizontal=8.dp,vertical=12.dp),enter=slideInVertically{-it}+fadeIn(),exit=slideOutVertically{-it}+fadeOut()) {
                 Surface(shape=RoundedCornerShape(50),color=Bar,contentColor=OnBar,shadowElevation=8.dp) {
                     Row(Modifier.horizontalScroll(rememberScrollState()).padding(start=16.dp,end=6.dp).heightIn(min=56.dp),verticalAlignment=Alignment.CenterVertically) {
                         Surface(shape=RoundedCornerShape(50),color=if(ready) Lime else Color(0xFF8C8AA0)) { Box(Modifier.size(8.dp)) }
@@ -363,6 +399,16 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
                         }) { Text(if (imeVisible) "Hide keyboard" else "Keyboard",color=if(ready) OnBar else OnBar.copy(alpha=0.38f)) }
                         TextButton(enabled=ready,onClick={clipboard=true}) { Text("Clipboard",color=if(ready) OnBar else OnBar.copy(alpha=0.38f)) }
                         TextButton(enabled=ready,onClick={session.view?.resetZoom()}) { Text("Fit",color=if(ready) OnBar else OnBar.copy(alpha=0.38f)) }
+                        TextButton(enabled=ready,onClick={
+                            try {
+                                if (!session.focus.supported) Toast.makeText(context,"Quiet desktop needs Android 10 or newer.",Toast.LENGTH_LONG).show()
+                                else if (!session.focus.permitted) {
+                                    Toast.makeText(context,"Allow Pane in Do Not Disturb access, then turn on Quiet desktop.",Toast.LENGTH_LONG).show()
+                                    openLink(context,Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+                                } else session.focus.updateEnabled(!session.focus.enabled)
+                            } catch (_: Exception) { Toast.makeText(context,"Couldn't change Quiet desktop. Check Android's Do Not Disturb settings.",Toast.LENGTH_LONG).show() }
+                        }) { Text(if(session.focus.active) "Quiet: on" else if(session.focus.enabled) "Quiet: paused" else "Quiet desktop",color=OnBar) }
+                        TextButton(enabled=ready,onClick={if(activity.desktopPinned) activity.unpinDesktop() else pinPrompt=true}) { Text(if(activity.desktopPinned) "Unpin desktop" else "Pin desktop",color=OnBar) }
                         IconButton(onClick={help=true}) { Icon(Icons.Default.Info,"Controls and session info") }
                         IconButton(onClick={confirmExit=true}) { Icon(Icons.Default.Close,"Disconnect") }
                         FilledTonalIconButton(enabled=ready,onClick={session.toolbar=false}) { Icon(Icons.Default.KeyboardArrowUp,"Hide toolbar") }
@@ -370,12 +416,12 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
                 }
             }
             // A small handle keeps the toolbar reachable by touch without covering much of the remote panel.
-            if (!session.toolbar) Box(Modifier.align(Alignment.TopCenter).size(96.dp,48.dp).semantics { contentDescription="Session toolbar" }.clickable(role=Role.Button,onClickLabel="Show toolbar"){session.toolbar=true},contentAlignment=Alignment.Center) {
+            if (!session.toolbar) Box(Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.displayCutout).size(96.dp,48.dp).semantics { contentDescription="Session toolbar" }.clickable(role=Role.Button,onClickLabel="Show toolbar"){session.toolbar=true},contentAlignment=Alignment.Center) {
                 Surface(shape=RoundedCornerShape(50),color=OnBar.copy(alpha=0.45f)) { Box(Modifier.size(56.dp,5.dp)) }
             }
         }
         // Keep modifiers available whenever the user chooses the on-screen keyboard.
-        if (ready && (!hardKeyboard || imeVisible)) Surface(color=Bar,contentColor=OnBar) {
+        if (ready && imeVisible) Surface(color=Bar,contentColor=OnBar) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically) {
                 FilterChip(selected=keyboard.ctrl,onClick={keyboard.toggleCtrl();session.view?.requestFocus()},label={Text("Ctrl")},modifier=Modifier.heightIn(min=48.dp),enabled=ready)
                 FilterChip(selected=keyboard.alt,onClick={keyboard.toggleAlt();session.view?.requestFocus()},label={Text("Alt")},modifier=Modifier.heightIn(min=48.dp),enabled=ready)
@@ -385,13 +431,15 @@ private val RemoteShortcuts = listOf("Esc" to 0x1b,"Tab" to 0x09,"↑" to 0x26,"
             }
         }
     }
-    if(confirmExit) AlertDialog(onDismissRequest={confirmExit=false;session.view?.requestFocus()},title={Text("Leave your desktop?")},text={Text("Your apps keep running on the VPS. Reconnect when you’re ready.")},confirmButton={TextButton(onClick={confirmExit=false;session.disconnect()}){Text("Disconnect")}},dismissButton={TextButton(onClick={confirmExit=false;session.view?.requestFocus()}){Text("Stay")}})
+    if(pinPrompt) AlertDialog(onDismissRequest={pinPrompt=false},title={Text("Pin this desktop?")},text={Text("Android will ask to keep Pane on screen. Home and app switching are restricted while pinned. Use Android's unpin gesture, or open this toolbar with Ctrl+Alt+Home and choose Unpin desktop. Disconnect also unpins Pane.")},confirmButton={TextButton(onClick={pinPrompt=false;activity.pinDesktop()}){Text("Pin desktop")}},dismissButton={TextButton(onClick={pinPrompt=false}){Text("Cancel")}})
+    if(confirmExit) AlertDialog(onDismissRequest={confirmExit=false;session.view?.requestFocus()},title={Text("Leave your desktop?")},text={Text("Your apps keep running on the server. Reconnect when you’re ready.")},confirmButton={TextButton(onClick={confirmExit=false;session.disconnect()}){Text("Disconnect")}},dismissButton={TextButton(onClick={confirmExit=false;session.view?.requestFocus()}){Text("Stay")}})
     if(help) AlertDialog(onDismissRequest={help=false;session.view?.requestFocus()},title={Text("A little help")},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(16.dp)) {
-        Text("Pane ${BuildConfig.VERSION_NAME} · ${if (session.profile.audio) "Sound on" else "Sound off"}",style=MaterialTheme.typography.bodySmall)
-        Text("Keyboard: typing follows your Android layout. Ctrl/Alt shortcuts go to the desktop. Ctrl+Alt+Home opens or hides this toolbar. Back, volume and Android system shortcuts stay local.")
-        Text("Trackpad: click or tap to click, right click and middle click are supported. Two fingers scroll in both directions; supported touchpad pinches zoom. Android keeps its system navigation gestures.")
+        Text("Pane ${BuildConfig.VERSION_NAME} · Voxl",style=MaterialTheme.typography.bodySmall)
+        Text("Keyboard: typing follows your Android layout. Ctrl/Alt shortcuts go to the desktop. Ctrl+Alt+Home opens or hides this toolbar. Volume/media keys go to the host while the desktop has focus. Back opens Pane's controls. Android-reserved shortcuts still belong to the system.")
+        Text("Trackpad: click or tap to click, right click and middle click are supported. Two fingers scroll in both directions; supported touchpad pinches zoom. Pointer capture keeps the mouse inside the desktop while the toolbar is hidden. Ctrl+Alt+Home or Back releases it to show controls.")
         Text("Touchscreen: tap to click, hold to right click, double tap and hold to drag. Two fingers scroll; pinch to zoom. In trackpad mode the screen moves the pointer like a laptop.")
-        Text("${session.size} · 24-bit · TLS\n$redraws redraws in the last second",style=MaterialTheme.typography.bodySmall)
+        Text("${session.size} · H.264 · Voxl\n$redraws redraws in the last second",style=MaterialTheme.typography.bodySmall)
+        Text("Quiet desktop is optional and uses your Android priority Do Not Disturb policy, including its call and alarm exceptions. It stops when Pane loses focus or disconnects. If Android ends Pane unexpectedly, reopen Pane or disable its desktop mode in Android Do Not Disturb. Pin desktop adds Android's screen-pinning protection.",style=MaterialTheme.typography.bodySmall)
         Text("Keyboard requests the Android keyboard with or without a cover. Back hides it first. Uncommitted composition is local; clipboard transfer is best for large passages.",style=MaterialTheme.typography.bodySmall)
         Text("Redraws depend on screen activity; this is not a network latency measurement.",style=MaterialTheme.typography.bodySmall)
     }},confirmButton={TextButton(onClick={help=false;session.view?.requestFocus()}){Text("Got it")}})

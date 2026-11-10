@@ -13,3 +13,7 @@ local.properties
 app/src/main/jniLibs/
 
 __pycache__/
+
+# /improve advisor plans stay local.
+plans/
+advisor-plans/

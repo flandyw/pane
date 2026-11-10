@@ -6,7 +6,6 @@ export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
 [[ -r .signing/password && -f .signing/pane.p12 ]] || { echo 'Missing .signing/pane.p12 and .signing/password. See README.md.' >&2; exit 1; }
 export PANE_SIGNING_PASSWORD
 PANE_SIGNING_PASSWORD=$(cat .signing/password)
-./scripts/build-native.sh
 ./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease --console=plain
 ./scripts/verify-apk.py
 "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk

@@ -1,168 +1,115 @@
 # Pane
 
-An ARM64 Android RDP client for a tablet connecting over Tailscale to a CPU-only
-Ubuntu / XFCE / xrdp VPS. Native FreeRDP 3.32.2, Material 3 Expressive, Android 8+.
+Pane's custom Android tablet UI, now backed exclusively by
+[Voxl](https://github.com/tembo/voxl). The original responsive connection card,
+purple/lime light and dark themes, quality presets, floating auto-hiding toolbar,
+keyboard shortcuts, touch/trackpad gestures, zoom, IME handling and explicit text
+clipboard are retained. Voxl WebSockets and MediaCodec H.264 replace FreeRDP.
 
-## Install
+## Connect
 
 Download the signed APK from https://pane.flandolf.me/releases/latest.
-Allow your browser to install apps when Android asks. Open Tailscale and connect
-to the same tailnet as the VPS, then open Pane. Enter the VPS's Tailscale address, your Linux
-username and the server certificate SHA-256 (see below); Pane remembers them.
-Enter your Linux password and tap **Open desktop**. Enable **Remember password**
-to save it encrypted on this tablet when connecting; turn the switch off to delete
-it. The option is off by default, keeping the password in the connection only.
+Enter the Voxl server URL, for example `wss://server.example.com:6901/ws`, and
+its **Voxl password**, then tap **Open desktop**. An omitted scheme defaults to
+WSS; an omitted path defaults to `/ws`. Use the port your Voxl server serves.
+The Linux username and xrdp fingerprint fields no longer apply to this protocol.
 
-Presets set the desktop height (Fast 800, Balanced 1000, Sharp 1200 px); the width
-follows the tablet's screen shape so the desktop fills it without bars. On a
-OnePlus Pad 2 Pro (3392×2400) Sharp is 1696×1200, an exact 2× scale. Each
-connection uses 24-bit colour, TLS, bitmap compression, and no H.264 / RemoteFX /
-desktop effects. **Desktop sound** (on by default) plays the VPS's audio through
-AAudio, falling back to OpenSL ES; turn it off to save a little VPS work. During a
-session the volume keys set media volume, and keyboard media keys
-(play/pause, next, previous, stop) go to the desktop. These are starting settings, not a measured claim of
-superiority over other clients.
+**Remember password** is optional and off by default. It stores an AES-GCM
+password encrypted with Android Keystore and bound to the server URL. Turning
+it off deletes the saved password. Old RDP settings are left untouched and never
+reused for Voxl. The app retains package `app.pane.rdp` and its signing identity.
 
-The session is full screen. The toolbar hides a moment after connecting; tap the
-handle at the top, press Back, or press **Ctrl+Alt+Home** to bring it back. With
-the keyboard cover attached, the password field is focused when server details are valid (type it and
-press Enter), ordinary typing follows Android’s keyboard layout and app-owned shortcuts go to
-the desktop. The shortcut bar is hidden unless you open the software keyboard.
-Android keeps Back, volume and its reserved system shortcuts. The
-cover's trackpad drives the remote cursor directly (Android's own arrow is
-hidden): click or tap to click, two-finger click to right click, two fingers
-scroll vertically and horizontally; supported touchpad pinches zoom. Android
-keeps its system navigation gestures.
+WSS verifies certificates and hostnames using Android's trusted authorities.
+Explicit WS addresses are supported over a trusted private network such as
+Tailscale; WS itself has no TLS encryption. Pane embeds neither a VPN nor a server.
 
-On the touchscreen, trackpad mode is the default. Tap to click, hold to right
-click, double tap and hold to drag. Two fingers scroll; pinch to zoom. When
-zoomed, the viewport follows the pointer. Switch to direct touch in the toolbar.
-The keyboard button requests the Android keyboard with or without a physical
-keyboard; Ctrl and Alt in the shortcut bar toggle until tapped again. Clipboard
-transfer is explicit in the toolbar. Disconnect leaves your applications running
-on the VPS.
+Fast/Balanced/Sharp keep their original desktop sizes; the server must enable
+`--enable-resize` to apply them. Otherwise the host retains its resolution.
+The original toolbar provides touch mode, keyboard, clipboard, fit and help.
+Ctrl+Alt+Home toggles it. Back opens local controls; volume/media keys are sent to
+the host while the desktop has focus (host support determines their effect). Clipboard transfer
+is explicit and text-only. No audio is requested by the current Voxl transport.
+Disconnect leaves host applications running.
 
-The connection form adapts to phones, split-screen windows and larger text, and
-follows Android's light/dark theme. **Server verification** includes a selectable
-certificate command. Password visibility is optional; visibility is reset when
-the server or account changes. The session toolbar scrolls horizontally on narrow
-screens and stays visible when touch exploration is enabled.
+## Connected immersion
 
-See [the polish ledger](docs/POLISHES.md) for the UI, input and rendering changes
-and remaining device checks.
-The [Android input compatibility notes](docs/ANDROID-INPUT.md) link the platform
-research, describe keyboard/IME/trackpad routing, and list hardware checks and
-remaining remote-text limitations.
+The desktop fills the display, including the camera-cutout area, while the toolbar
+stays inside the safe area. System bars are hidden again on focus/resume, and the
+original Pane toolbar hides after two seconds. The shortcut strip appears only with
+the software keyboard; attaching a physical keyboard hides the software keyboard.
+Android focus highlights, desktop autofill/content capture, local click sounds and
+long-press haptics are disabled for the remote view.
 
-## Rendering and security
+With a mouse or trackpad connected, Android pointer capture is requested while the
+session is ready, the toolbar/IME are hidden and the desktop owns focus. The cursor
+can move without hitting Android screen edges. Raw captured touchpad contacts use
+Pane's existing tap, drag, two-finger scroll and pinch gestures, normalized using
+the device's reported axis resolution. Capture releases for local controls,
+keyboard, dialogs, focus loss and disconnect. Ctrl+Alt+Home, Back or touching the
+handle opens the toolbar. Android accessibility touch exploration keeps the toolbar
+available and disables automatic capture. Mouse capture bypasses Android pointer
+acceleration; devices without touchpad resolution need real-hardware calibration.
 
-FreeRDP decodes RDP on a native thread. Its paint callback copies only damaged
-regions into a reusable bitmap while GDI is stable. Android's hardware Canvas
-presents that bitmap; redraw requests combine at display refresh, without a
-queue of full-screen Java bitmap allocations. Server cursor shapes are drawn
-locally at the current pointer position. Input goes straight to FreeRDP's event
-queue. Touch clicks are sent on release, without waiting for double-tap timeout.
+Two optional controls are in the existing toolbar:
 
-The SHA-256 certificate pin is obtained directly from the VPS. A native patch
-makes a supplied pin mandatory even if a different certificate chains to a
-trusted CA. No certificate-ignore or trust-on-first-use mode. Unknown/changed
-certificate callbacks reject. Profile fields are validated. Remembered passwords
-use AES-GCM with a key in Android Keystore, bound to the server, username and
-certificate pin. Passwords aren't backed up or included in logs. Anyone who can
-open Pane on this tablet can use its remembered password. TLS is required; older RDP security
-is not enabled. Clipboard access is initiated by the user.
+- **Quiet desktop** (Android 10+): grant Do Not Disturb access once, then enable it.
+  Pane activates its own priority-DND rule only for a connected foreground desktop.
+  Existing call/alarm exceptions and other DND rules are retained. The preference
+  is remembered; disconnecting, reconnecting or leaving Pane pauses its rule. A
+  killed/crashed foreground process can leave this rule active until Pane next
+  opens or you turn off its mode in Android's DND settings.
+- **Pin desktop**: Android asks to pin Pane and restrict Home/app switching. Use
+  the system unpin gesture or Pane's **Unpin desktop** control; disconnect also
+  unpins. Pinning is never requested automatically.
 
-If the VPS certificate is intentionally replaced, verify the new fingerprint
-in a trusted VPS terminal with:
-
-```sh
-openssl x509 -in /etc/xrdp/cert.pem -noout -fingerprint -sha256
-```
-
-Then update **Server verification** in Pane. RDP stays private through the VPS's
-Tailscale-only UFW rules. Pane uses the separately installed Tailscale app;
-it does not embed a VPN. No microphone, camera, storage, or file redirection.
-
-## Build
-
-```sh
-git submodule update --init --recursive
-# Install JDK 25, Android SDK platform/build-tools 36, NDK r29, CMake, Ninja,
-# pkg-config, Perl, make and llvm-18. On an ARM Linux builder also install
-# clang-18 and lld-18.
-export ANDROID_HOME="$HOME/android-sdk"
-export ANDROID_NDK_HOME="$ANDROID_HOME/android-ndk-r29"
-./scripts/build.sh                 # native engine, unit tests, lint, signed release
-./scripts/build.sh --publish       # also publish through release-server
-```
-
-The first native build fetches hash-verified dependencies using FreeRDP's
-superbuild. Optional video/image codecs and compressed audio codecs (Opus, AAC, MP3) are disabled; sound is PCM/ADPCM for this use case.
-Builds use two jobs. On an ARM Linux host the script makes a local hard-linked
-NDK overlay and uses the host's LLVM 18 with the NDK's Android sysroot and
-compiler runtime; the original SDK is unchanged. On x86 Linux it uses the NDK
-compiler. Both link with 16 KiB ELF page alignment. Native sources are pinned
-by the submodule commit; local changes are in `scripts/patches/freerdp.patch`
-and applied idempotently by the build script. The JNI free patch joins the
-native connection thread before freeing its context.
-
-Signing material is in `.signing/pane.p12` (alias `pane`) with a matching
-`.signing/password`, excluded from Git. Back these files up securely: the same
-key is required for Android updates. A new installation can generate a PKCS12
-RSA signing key with `keytool -genkeypair`; provide its password privately in the
-password file. Never replace the signing key of a published app.
-
-Version name/code live in `app/build.gradle.kts`; increment both before publishing.
-`release-server` verifies the APK package, signature and pinned signing certificate
-before publication, then serves immutable builds and SHA-256 checksums.
-
-## Release service
-
-```sh
-./release-server/install.sh none
-./release-server/pin-cert.sh app/build/outputs/apk/release/app-release.apk
-./release-server/publish.sh app/build/outputs/apk/release/app-release.apk
-sudo systemctl status pane-releases
-curl -f https://pane.flandolf.me/releases/latest.json
-```
-
-Configured domain: `pane.flandolf.me`; service: `pane-releases`; loopback port:
-8789. HTTPS terminates in Nginx, Certbot renews it, Cloudflare is configured.
-The Go service has read-only release storage and no upload API. Existing apps'
-release services aren't changed.
+Android still owns reserved shortcuts, power/lock controls, mandatory navigation
+and some OEM gestures. Complete kiosk lockdown requires managed-device privileges;
+ordinary app immersion cannot guarantee that all Android UI is inaccessible.
 
 ## Updates
 
-Pane checks `latest.json` each time it opens and downloads a newer build in the
-background. The APK must come from `https://pane.flandolf.me/releases/`, match
-the published size and SHA-256, and carry Pane's package and version code;
-Android also requires the same signing key. The first update shows **Update to
-x.y.z**: tap it and allow Pane under *Install unknown apps*. After that, Pane
-tries a silent self-update (Android 12+, `USER_ACTION_NOT_REQUIRED`) whenever you
-leave the app with no desktop open, so the next launch is the new version. If
-Android still asks for confirmation, the button stays until you tap it.
-Installs never start during a session. Builds before 0.2.0 must be updated
-once by hand.
+Pane checks `https://pane.flandolf.me/releases/latest.json` on launch and downloads
+new releases in the background. Its update card shows percentage, downloaded size,
+verification, readiness and install status, with retry on failure. Downloads are
+bounded by the published size and verified by SHA-256, package, version and signing
+certificate. Redirects outside the release service are not followed.
 
-## Validation
+Enable **Install unknown apps** for Pane once using **Enable quiet updates**.
+On Android 12+, Pane requests a silent self-update when you leave the app without
+an open desktop, including when a download finishes after you have left. Android
+may still require confirmation; **Finish update** handles that without opening
+prompts during a desktop session. Android 8–11 use the explicit **Update now** flow.
+The next launch after an upgrade shows a short confetti celebration, respecting
+Android's animation setting, and a dismissible success card. Fresh installs and
+repeat launches do not replay the celebration.
 
-JVM tests cover profile validation, TLS/CPU settings, argument boundaries,
-resolution budgets and non-finite inputs, field-specific endpoint validation, pasted
-fingerprints, bounded fractional scrolling, physical key mapping, and password encryption (identity
-binding, tampering and corrupt data). Android lint and release signing
-checks run before publishing. Native ABI/ELF dependency checks run on the built APK.
-The release server's own tests and health endpoint are checked during installation.
+## Build
 
-Physical Android device automation is disabled on this VPS. Before calling this
-production ready, test tablet installation, password entry, certificate mismatch,
-connect/cancel/reconnect, rotation/split screen, mouse buttons/scroll, touch drag,
-IME composition, Ctrl/Alt shortcuts, clipboard and background/resume. Compare
-Fast/Balanced/Sharp on the same network with Tailscale reporting a direct peer
-connection. Screen redraw count is activity-dependent, not an RTT measurement.
+Install JDK 25 and Android SDK platform/build-tools 36. No NDK, CMake, native
+build, or FreeRDP checkout is needed.
 
-## Licenses
+```sh
+export JAVA_HOME=/path/to/jdk-25
+export ANDROID_HOME="$HOME/android-sdk"
+./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
+./scripts/verify-apk.py app/build/outputs/apk/debug/app-debug.apk
+```
 
-Pane's own code is Apache-2.0. FreeRDP's main libraries are Apache-2.0; its Android
-JNI files retain MPL-2.0 notices. OpenSSL is Apache-2.0 and uriparser BSD-3-Clause.
-The APK includes third-party notices, the modified JNI source and native patch in
-`assets/third-party/`; exact upstream sources are pinned by the FreeRDP submodule.
+For signed releases, retain `.signing/pane.p12` (alias `pane`) and
+`.signing/password`, then run `./scripts/build.sh`. Never replace a published
+app's signing key. `./scripts/build.sh --publish` also publishes through the
+existing `release-server` submodule. Signing files remain excluded from Git.
+The unused FreeRDP submodule and its pre-existing local modifications are preserved.
+
+## Validation and licenses
+
+JVM tests cover Pane's existing keyboard and scroll handling, Voxl input translation,
+endpoint validation, encrypted password binding, video metadata, release-feed
+validation, bounded downloads/progress, and celebration eligibility. Release builds
+run lint, APK contents checks and signature verification. Physical-device and live
+Voxl testing remain necessary for video decoding, input, reconnects and Android's
+permission/confirmation/silent-install behavior.
+
+Pane's code is Apache-2.0. Voxl's transport and stripe decoder are adapted from
+[voxl-pocket-android](https://github.com/ericmigi/voxl-pocket-android) under MIT;
+the pinned upstream commit and license are in `app/src/main/assets/third-party/`.

@@ -1,6 +1,7 @@
 package app.pane.rdp
 
 import android.content.Context
+import android.graphics.Matrix
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -20,7 +21,10 @@ import android.view.MotionEvent
 import android.view.PointerIcon
 import android.view.ScaleGestureDetector
 import android.view.HapticFeedbackConstants
-import android.view.View
+import android.widget.FrameLayout
+import android.view.TextureView
+import android.view.Surface
+import android.graphics.SurfaceTexture
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -28,8 +32,93 @@ import android.view.inputmethod.InputMethodManager
 import kotlin.math.abs
 import kotlin.math.min
 
-class DesktopView(context: Context, private val session: RdpSession) : View(context) {
+class DesktopView(context: Context, private val session: VoxlSession) : FrameLayout(context) {
+    private var immersed = false
+    private var rawTouchpadStream = false
+    private var capturedPadClicked = false
+    private var capturedMouseTouching = false
+    fun setImmersed(value: Boolean) {
+        immersed = value
+        syncPointerCapture()
+    }
+    private fun syncPointerCapture() {
+        val capture = immersed && hasFocus() && hasWindowFocus() && isAttachedToWindow &&
+            session.phase == Phase.CONNECTED && !session.inputSuspended && InputDevice.getDeviceIds().any { id ->
+                InputDevice.getDevice(id)?.let { it.supportsSource(InputDevice.SOURCE_MOUSE) ||
+                    it.supportsSource(InputDevice.SOURCE_MOUSE_RELATIVE) || it.supportsSource(InputDevice.SOURCE_TOUCHPAD) } == true
+            }
+        if (capture && !hasPointerCapture()) requestPointerCapture()
+        else if (!capture && hasPointerCapture()) releasePointerCapture()
+    }
+    override fun onPointerCaptureChange(hasCapture: Boolean) {
+        super.onPointerCaptureChange(hasCapture)
+        if (!hasCapture) {
+            pointer.release(); releaseDrag(); cancelGestures()
+            capturedMouseTouching = false; rawTouchpadStream = false
+            session.keyboard.releasePhysical()
+        }
+    }
+    override fun onCapturedPointerEvent(event: MotionEvent): Boolean {
+        if (!immersed || session.phase != Phase.CONNECTED || session.inputSuspended || !hasWindowFocus()) {
+            releaseInput()
+            return true
+        }
+        if (event.actionMasked == MotionEvent.ACTION_CANCEL) { releaseInput(); return true }
+        if (event.isFromSource(InputDevice.SOURCE_TOUCHPAD)) {
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) capturedPadClicked = false
+            if (event.buttonState != 0 || event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS || event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE)
+                capturedPadClicked = true
+            pointer.buttons(event.buttonState)
+            if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS || event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) return true
+            // Raw captured touchpad coordinates are device units; preserve physical gesture distances.
+            val dx = (event.device?.getMotionRange(MotionEvent.AXIS_X, InputDevice.SOURCE_TOUCHPAD) ?: event.device?.getMotionRange(MotionEvent.AXIS_X))?.resolution ?: 0f
+            val dy = (event.device?.getMotionRange(MotionEvent.AXIS_Y, InputDevice.SOURCE_TOUCHPAD) ?: event.device?.getMotionRange(MotionEvent.AXIS_Y))?.resolution ?: 0f
+            val matrix = Matrix().apply { setScale(touchpadCoordinateScale(dx, resources.displayMetrics.xdpi), touchpadCoordinateScale(dy, resources.displayMetrics.ydpi)) }
+            val touch = MotionEvent.obtain(event)
+            try { touch.transform(matrix); return onTouchEvent(touch) } finally { touch.recycle() }
+        }
+        if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+            for (h in 0 until event.historySize) moveCaptured(event.getHistoricalX(h), event.getHistoricalY(h))
+            moveCaptured(event.x, event.y)
+        }
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
+            for (h in 0 until event.historySize) pointer.scroll(event.getHistoricalAxisValue(MotionEvent.AXIS_HSCROLL,h),
+                event.getHistoricalAxisValue(MotionEvent.AXIS_VSCROLL,h),1f,1,event.deviceId)
+            pointer.scroll(event.getAxisValue(MotionEvent.AXIS_HSCROLL),event.getAxisValue(MotionEvent.AXIS_VSCROLL),1f,1,event.deviceId)
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) capturedMouseTouching = true
+        if (event.actionMasked == MotionEvent.ACTION_UP) capturedMouseTouching = false
+        pointer.buttons(if (event.actionMasked == MotionEvent.ACTION_UP) 0 else if (capturedMouseTouching && event.buttonState == 0) MotionEvent.BUTTON_PRIMARY else event.buttonState)
+        postInvalidateOnAnimation()
+        return true
+    }
+    private fun moveCaptured(dx: Float, dy: Float) {
+        if (!dx.isFinite() || !dy.isFinite()) return
+        cursorX += dx / desktopScale(); cursorY += dy / desktopScale()
+        clampCursor(); sendMouse(0x0800)
+    }
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val desk = FrameLayout(context)
+    fun showStripes() {
+        desk.removeAllViews()
+        desk.layoutParams = LayoutParams(session.width, session.height)
+        session.stripes.forEach { stripe ->
+            desk.addView(TextureView(context).apply {
+                isOpaque = true
+                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(texture: SurfaceTexture, w: Int, h: Int) {
+                        texture.setDefaultBufferSize(stripe.width, stripe.height)
+                        stripe.setSurface(Surface(texture)); session.requestKeyframe()
+                    }
+                    override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean { stripe.setSurface(null); return true }
+                    override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, w: Int, h: Int) = Unit
+                    override fun onSurfaceTextureUpdated(texture: SurfaceTexture) { session.paints.incrementAndGet() }
+                }
+            }, LayoutParams(stripe.width, stripe.height).apply { topMargin = stripe.y })
+        }
+        postInvalidateOnAnimation()
+    }
+    override fun onInterceptTouchEvent(event: MotionEvent) = true
     private val pointerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; strokeWidth = 2f }
     private var zoom = 1f
     private var cursorX = session.profile.quality.width(session.aspect) / 2f
@@ -41,9 +130,12 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     private var connection: DesktopInputConnection? = null
     private val inputManager = context.getSystemService(InputManager::class.java)
     private val inputDevices = object : InputManager.InputDeviceListener {
-        override fun onInputDeviceAdded(deviceId: Int) = Unit
-        override fun onInputDeviceRemoved(deviceId: Int) { releaseInput(); restartInput() }
-        override fun onInputDeviceChanged(deviceId: Int) { releaseInput(); restartInput() }
+        override fun onInputDeviceAdded(deviceId: Int) { post { syncPointerCapture() } }
+        override fun onInputDeviceRemoved(deviceId: Int) { releaseInput(); restartInput(); post { syncPointerCapture() } }
+        override fun onInputDeviceChanged(deviceId: Int) {
+            // Capture itself reconfigures devices: releasing it here would create a capture loop.
+            pointer.release(); releaseDrag(); session.keyboard.releasePhysical(); cancelGestures(); restartInput()
+        }
     }
     private val hiddenPointer = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
     private var lastX = 0f
@@ -59,19 +151,21 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent) = true
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (!session.trackpad) position(e.x,e.y)
+            if (rawTouchpadStream && capturedPadClicked) return true
+            if (!session.trackpad && !rawTouchpadStream) position(e.x,e.y)
             performClick()
             return true
         }
         override fun onLongPress(e: MotionEvent) {
+            if (rawTouchpadStream && capturedPadClicked) return
             if (!hasFocus() || !hasWindowFocus() || session.inputSuspended || session.phase != Phase.CONNECTED) return
-            if (!session.trackpad) position(e.x,e.y)
+            if (!session.trackpad && !rawTouchpadStream) position(e.x,e.y)
             click(0x2000)
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         }
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
             if (multiTouch) return true
-            if (session.trackpad) {
+            if (session.trackpad || rawTouchpadStream) {
                 val scale = desktopScale()
                 cursorX -= distanceX / scale
                 cursorY -= distanceY / scale
@@ -82,7 +176,8 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
             return true
         }
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            if (!session.trackpad) position(e.x,e.y)
+            if (rawTouchpadStream && capturedPadClicked) return true
+            if (!session.trackpad && !rawTouchpadStream) position(e.x,e.y)
             sendMouse(0x9000)
             dragging = true
             return true
@@ -98,18 +193,27 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         isFocusableInTouchMode = true
         contentDescription = "Remote desktop. Tap to click, hold to right click, double tap and hold to drag. Two fingers scroll; pinch to zoom. Ctrl+Alt+Home shows the toolbar."
         setBackgroundColor(Color.rgb(20,21,28))
+        isSoundEffectsEnabled = false
+        isHapticFeedbackEnabled = false
+        defaultFocusHighlightEnabled = false
+        importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        if (Build.VERSION.SDK_INT >= 30) importantForContentCapture = IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS
+        descendantFocusability = FOCUS_BLOCK_DESCENDANTS
+        desk.pivotX = 0f; desk.pivotY = 0f
+        addView(desk, LayoutParams(0, 0))
     }
     // The remote cursor is drawn locally at the pointer, so hide Android's arrow to avoid two cursors.
     override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? =
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) hiddenPointer else super.onResolvePointerIcon(event,pointerIndex)
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (!hasWindowFocus) releaseInput() else restartInput()
+        if (!hasWindowFocus) releaseInput() else { restartInput(); post { syncPointerCapture() } }
     }
     override fun onAttachedToWindow() {
-        super.onAttachedToWindow(); session.view = this
+        super.onAttachedToWindow(); session.view = this; showStripes()
         inputManager.registerInputDeviceListener(inputDevices,null)
         requestFocus()
+        post { syncPointerCapture() }
     }
     override fun onDetachedFromWindow() {
         inputManager.unregisterInputDeviceListener(inputDevices)
@@ -118,7 +222,7 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     }
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus,direction,previouslyFocusedRect)
-        if (!gainFocus) { session.keyboard.releasePhysical(); pointer.release(); releaseDrag(); connection?.closeConnection(); cancelGestures() }
+        if (!gainFocus) { releaseInput() } else post { syncPointerCapture() }
     }
     fun restartInput() {
         if (hasFocus() && hasWindowFocus() && !session.inputSuspended) context.getSystemService(InputMethodManager::class.java).restartInput(this)
@@ -129,25 +233,28 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         postInvalidateOnAnimation()
     }
     private fun desktopScale(): Float {
-        val image = session.bitmap ?: return 1f
-        return min(width.toFloat()/image.width, height.toFloat()/image.height).coerceAtLeast(0.01f)*zoom
+        if (session.width <= 0 || session.height <= 0) return 1f
+        return min(width.toFloat()/session.width, height.toFloat()/session.height).coerceAtLeast(0.01f)*zoom
     }
     private fun updateBounds() {
-        val image = session.bitmap ?: return
+        if (session.width <= 0 || session.height <= 0) return
         val scale = desktopScale()
-        val w = image.width*scale; val h = image.height*scale
+        val w = session.width*scale; val h = session.height*scale
         val x = if (w <= width) (width-w)/2 else (width/2f-cursorX*scale).coerceIn(width-w,0f)
         val y = if (h <= height) (height-h)/2 else (height/2f-cursorY*scale).coerceIn(height-h,0f)
         bounds.set(x,y,x+w,y+h)
     }
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
+    override fun dispatchDraw(canvas: Canvas) {
+        clampCursor()
+        updateBounds()
+        desk.scaleX = desktopScale(); desk.scaleY = desktopScale()
+        desk.translationX = bounds.left; desk.translationY = bounds.top
+        super.dispatchDraw(canvas)
         synchronized(session.frameLock) {
-            val image = session.bitmap ?: return
+            if (session.width <= 0 || session.height <= 0) return
             clampCursor()
             updateBounds()
             val scale = desktopScale()
-            canvas.drawBitmap(image,null,bounds,paint)
             if (session.cursorVisible) {
                 val x = bounds.left+cursorX*scale
                 val y = bounds.top+cursorY*scale
@@ -164,12 +271,11 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
                 }
             }
         }
-        session.paints.incrementAndGet()
     }
     private fun clampCursor() {
-        val image = session.bitmap ?: return
-        cursorX = cursorX.coerceIn(0f,(image.width-1).toFloat())
-        cursorY = cursorY.coerceIn(0f,(image.height-1).toFloat())
+        if (session.width <= 0 || session.height <= 0) return
+        cursorX = cursorX.coerceIn(0f,(session.width-1).toFloat())
+        cursorY = cursorY.coerceIn(0f,(session.height-1).toFloat())
     }
     // No frameLock: bounds are UI-thread state, so input never waits on a native frame copy.
     private fun position(x: Float,y: Float) {
@@ -192,6 +298,7 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     private fun click(button: Int) { sendMouse(button or 0x8000); sendMouse(button); postInvalidateOnAnimation() }
     private fun releaseDrag() { if (dragging) { sendMouse(0x1000); dragging = false } }
     fun releaseInput() {
+        if (hasPointerCapture()) releasePointerCapture()
         releaseDrag(); pointer.release(); session.keyboard.releaseAll()
         connection?.closeConnection()
         cancelGestures()
@@ -207,6 +314,7 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     fun resetZoom() { zoom = 1f; postInvalidateOnAnimation() }
     fun keyboard() {
         if (session.phase != Phase.CONNECTED || session.inputSuspended) return
+        setImmersed(false)
         requestFocus()
         // SHOW_IMPLICIT may be suppressed with a hardware keyboard; this is an explicit user request.
         post { if (hasWindowFocus() && hasFocus() && session.phase == Phase.CONNECTED && !session.inputSuspended) context.getSystemService(InputMethodManager::class.java).showSoftInput(this,0) }
@@ -263,6 +371,8 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (session.inputSuspended || session.phase != Phase.CONNECTED) return true
+        rawTouchpadStream = event.isFromSource(InputDevice.SOURCE_TOUCHPAD)
+        if (event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN) && hasPointerCapture()) releasePointerCapture()
         if (!hasFocus()) requestFocus()
         parent.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
@@ -447,11 +557,12 @@ class DesktopView(context: Context, private val session: RdpSession) : View(cont
         return handled
     }
     override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean {
-        // Physical terminal shortcuts must not be rewritten by the local IME. Back and volume pass through.
+        // Physical terminal shortcuts must not be rewritten by the local IME. Back passes through to Pane's local escape controls.
         if (event.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD && event.flags and KeyEvent.FLAG_SOFT_KEYBOARD == 0 &&
             event.isFromSource(InputDevice.SOURCE_KEYBOARD) && handleKey(event)) return true
         return super.dispatchKeyEventPreIme(event)
     }
+    override fun dispatchKeyShortcutEvent(event: KeyEvent): Boolean = handleKey(event) || super.dispatchKeyShortcutEvent(event)
     override fun dispatchKeyEvent(event: KeyEvent): Boolean = handleKey(event) || super.dispatchKeyEvent(event)
 
 }
@@ -508,7 +619,10 @@ internal fun virtualKey(code: Int): Int? = when(code) {
     KeyEvent.KEYCODE_PERIOD -> 0xbe
     KeyEvent.KEYCODE_SLASH -> 0xbf
     KeyEvent.KEYCODE_GRAVE -> 0xc0
-    // Media keys control the desktop's player; volume keys stay with the tablet.
+    // Media and volume keys control the host without showing Android's volume panel.
+    KeyEvent.KEYCODE_VOLUME_UP -> 0xaf
+    KeyEvent.KEYCODE_VOLUME_DOWN -> 0xae
+    KeyEvent.KEYCODE_VOLUME_MUTE -> 0xad
     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> 0xb3
     KeyEvent.KEYCODE_MEDIA_NEXT -> 0xb0
     KeyEvent.KEYCODE_MEDIA_PREVIOUS -> 0xb1

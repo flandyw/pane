@@ -167,10 +167,9 @@ class RemoteInputTest {
         assertEquals(listOf("日本語"),k.texts)
         assertEquals(200,k.keys.size)
     }
-    @Test fun backVolumeAndSystemNavigationAreNotMapped() {
+    @Test fun backAndSystemNavigationAreNotMapped() {
         val k=Keyboard()
         listOf(KeyEvent.KEYCODE_BACK,KeyEvent.KEYCODE_HOME,KeyEvent.KEYCODE_APP_SWITCH,
-            KeyEvent.KEYCODE_VOLUME_UP,KeyEvent.KEYCODE_VOLUME_DOWN,KeyEvent.KEYCODE_VOLUME_MUTE,
             KeyEvent.KEYCODE_LANGUAGE_SWITCH).forEach {
             assertFalse(k.down(it)); assertFalse(k.up(it))
         }

@@ -9,9 +9,8 @@ android {
         applicationId = "app.pane.rdp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
-        ndk { abiFilters += "arm64-v8a" }
+        versionCode = 6
+        versionName = "0.6.0"
     }
     signingConfigs {
         create("release") {
@@ -34,9 +33,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures { compose = true; buildConfig = true }
-    packaging { jniLibs { useLegacyPackaging = false } }
+    // Voxl uses Android MediaCodec; never package a leftover FreeRDP build.
+    sourceSets["main"].jniLibs.setSrcDirs(emptyList<String>())
 }
 dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation(platform("androidx.compose:compose-bom:2025.06.01"))
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")

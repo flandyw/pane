@@ -21,9 +21,9 @@ internal object PasswordCipher {
         }.generateKey()
     }
 
-    // Bind the secret to this server, account and certificate so edits cannot send it elsewhere.
+    // Bind the secret to the Voxl endpoint so edits cannot send it elsewhere.
     private fun identity(profile: Profile) =
-        listOf(profile.host.lowercase(), profile.username, profile.normalizedPin().lowercase()).joinToString("\u0000").toByteArray(Charsets.UTF_8)
+        profile.endpoint().toByteArray(Charsets.UTF_8)
 
     fun encrypt(password: String, profile: Profile, key: SecretKey = key()): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
